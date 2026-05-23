@@ -1,0 +1,491 @@
+"""Analyze check-worthy span-annotated debate speaker turns.
+
+This script reads either of the annotation shapes that exist in the workspace:
+
+- Label Studio exports with a ``spans`` column containing JSON offset spans.
+- Earlier CSVs with a single ``check_worthy_span`` text field.
+
+It produces summary tables and plots for:
+
+- speaker turn lengths
+- claim span lengths
+- claims per turn
+- claim density by normalized position inside a turn
+
+Example:
+	python analysis/analysis.py labelstudio/project-1-at-2026-05-22-21-39-fbc74640.csv \
+		--outdir analysis_outputs/project-1
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+import numpy as np
+import pandas as pd
+
+
+WORD_RE = re.compile(r"\S+")
+
+
+@dataclass
+class SpanRecord:
+	turn_index: int
+	span_index: int
+	start: Optional[int]
+	end: Optional[int]
+	text: str
+	reason: str
+	turn_char_len: int
+	turn_word_len: int
+	span_char_len: Optional[int]
+	span_word_len: Optional[int]
+	rel_start: Optional[float]
+	rel_end: Optional[float]
+	rel_len: Optional[float]
+
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+	parser = argparse.ArgumentParser(
+		description="Analyze check-worthy span annotations on debate speaker turns"
+	)
+	parser.add_argument(
+		"input_csv",
+		type=Path,
+		help="Annotated CSV to analyze",
+	)
+	parser.add_argument(
+		"--title-prefix",
+		type=str,
+		default=None,
+		help="Optional plot title prefix",
+	)
+	parser.add_argument(
+		"--bins",
+		type=int,
+		default=40,
+		help="Histogram bins for length plots",
+	)
+	return parser.parse_args(argv)
+
+
+def _first_existing_column(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+	for name in candidates:
+		if name in df.columns:
+			return name
+	return None
+
+
+def _word_count(text: Any) -> int:
+	if text is None:
+		return 0
+	value = str(text).strip()
+	if not value:
+		return 0
+	return len(WORD_RE.findall(value))
+
+
+def _safe_int(value: Any) -> Optional[int]:
+	try:
+		if value is None:
+			return None
+		if isinstance(value, float) and math.isnan(value):
+			return None
+		return int(value)
+	except Exception:
+		return None
+
+
+def _normalize_span_text(text: Any) -> str:
+	if text is None:
+		return ""
+	value = str(text).strip()
+	if not value or value.upper() == "NULL":
+		return ""
+	return value
+
+
+def _parse_json_spans(raw: Any) -> List[Dict[str, Any]]:
+	if raw is None:
+		return []
+	if isinstance(raw, list):
+		return [x for x in raw if isinstance(x, dict)]
+	if isinstance(raw, dict):
+		return [raw]
+	text = str(raw).strip()
+	if not text:
+		return []
+	try:
+		loaded = json.loads(text)
+	except Exception:
+		return []
+	if isinstance(loaded, list):
+		return [x for x in loaded if isinstance(x, dict)]
+	if isinstance(loaded, dict):
+		return [loaded]
+	return []
+
+
+def _span_word_count(text: str) -> int:
+	return _word_count(text)
+
+
+def _extract_spans_from_row(row: pd.Series, text_col: str) -> List[Tuple[Optional[int], Optional[int], str, str]]:
+	turn_text = "" if pd.isna(row.get(text_col)) else str(row.get(text_col))
+	spans_col = row.get("spans") if "spans" in row.index else None
+	check_span_col = row.get("check_worthy_span") if "check_worthy_span" in row.index else None
+	results: List[Tuple[Optional[int], Optional[int], str, str]] = []
+
+	raw_spans = _parse_json_spans(spans_col)
+	if raw_spans:
+		for span in raw_spans:
+			start = _safe_int(span.get("start"))
+			end = _safe_int(span.get("end"))
+			span_text = _normalize_span_text(span.get("text"))
+			reason = _normalize_span_text(span.get("reason"))
+			results.append((start, end, span_text, reason))
+		return results
+
+	span_text = _normalize_span_text(check_span_col)
+	if not span_text:
+		return results
+
+	start = turn_text.find(span_text)
+	if start >= 0:
+		end = start + len(span_text)
+	else:
+		start = None
+		end = None
+	results.append((start, end, span_text, ""))
+	return results
+
+
+def _build_metrics(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+	text_col = _first_existing_column(df, ["text", "sentence", "turn_text"])
+	if text_col is None:
+		raise ValueError("Expected a text column named 'text' or 'sentence'")
+
+	turn_rows: List[Dict[str, Any]] = []
+	claim_rows: List[SpanRecord] = []
+
+	for turn_index, (_, row) in enumerate(df.iterrows()):
+		turn_text = "" if pd.isna(row.get(text_col)) else str(row.get(text_col))
+		turn_char_len = len(turn_text)
+		turn_word_len = _word_count(turn_text)
+		turn_spans = _extract_spans_from_row(row, text_col=text_col)
+
+		rel_positions: List[float] = []
+		rel_lengths: List[float] = []
+		span_char_lengths: List[int] = []
+		span_word_lengths: List[int] = []
+
+		for span_index, (start, end, span_text, reason) in enumerate(turn_spans):
+			span_char_len: Optional[int]
+			span_word_len: Optional[int]
+			rel_start: Optional[float]
+			rel_end: Optional[float]
+			rel_len: Optional[float]
+
+			if start is not None and end is not None and end >= start:
+				span_char_len = end - start
+				span_word_len = _span_word_count(turn_text[start:end]) if turn_text else None
+				if turn_char_len > 0:
+					rel_start = start / turn_char_len
+					rel_end = end / turn_char_len
+					rel_len = span_char_len / turn_char_len
+				else:
+					rel_start = None
+					rel_end = None
+					rel_len = None
+			else:
+				span_char_len = len(span_text) if span_text else None
+				span_word_len = _span_word_count(span_text) if span_text else None
+				rel_start = None
+				rel_end = None
+				rel_len = None
+
+			if rel_start is not None:
+				rel_positions.append(rel_start)
+			if rel_len is not None:
+				rel_lengths.append(rel_len)
+			if span_char_len is not None:
+				span_char_lengths.append(span_char_len)
+			if span_word_len is not None:
+				span_word_lengths.append(span_word_len)
+
+			claim_rows.append(
+				SpanRecord(
+					turn_index=turn_index,
+					span_index=span_index,
+					start=start,
+					end=end,
+					text=span_text,
+					reason=reason,
+					turn_char_len=turn_char_len,
+					turn_word_len=turn_word_len,
+					span_char_len=span_char_len,
+					span_word_len=span_word_len,
+					rel_start=rel_start,
+					rel_end=rel_end,
+					rel_len=rel_len,
+				)
+			)
+
+		turn_rows.append(
+			{
+				"turn_index": turn_index,
+				"turn_char_len": turn_char_len,
+				"turn_word_len": turn_word_len,
+				"claim_count": len(turn_spans),
+				"claim_chars_total": sum(span_char_lengths),
+				"claim_words_total": sum(span_word_lengths),
+				"mean_rel_start": sum(rel_positions) / len(rel_positions) if rel_positions else None,
+				"mean_rel_len": sum(rel_lengths) / len(rel_lengths) if rel_lengths else None,
+			}
+		)
+
+	turn_metrics = pd.DataFrame(turn_rows)
+	claim_metrics = pd.DataFrame([asdict(row) for row in claim_rows])
+	return turn_metrics, claim_metrics
+
+
+def _save_summary(turn_metrics: pd.DataFrame, claim_metrics: pd.DataFrame, outdir: Path) -> None:
+	summary = {
+		"turn_count": int(len(turn_metrics)),
+		"claim_count": int(len(claim_metrics)),
+		"turns_with_claims": int((turn_metrics["claim_count"] > 0).sum()) if not turn_metrics.empty else 0,
+		"turn_length_chars": _series_summary(turn_metrics["turn_char_len"] if not turn_metrics.empty else pd.Series(dtype=float)),
+		"turn_length_words": _series_summary(turn_metrics["turn_word_len"] if not turn_metrics.empty else pd.Series(dtype=float)),
+		"claims_per_turn": _series_summary(turn_metrics["claim_count"] if not turn_metrics.empty else pd.Series(dtype=float)),
+		"claim_span_chars": _series_summary(claim_metrics["span_char_len"].dropna() if not claim_metrics.empty else pd.Series(dtype=float)),
+		"claim_span_words": _series_summary(claim_metrics["span_word_len"].dropna() if not claim_metrics.empty else pd.Series(dtype=float)),
+		"claim_rel_start": _series_summary(claim_metrics["rel_start"].dropna() if not claim_metrics.empty else pd.Series(dtype=float)),
+		"claim_rel_len": _series_summary(claim_metrics["rel_len"].dropna() if not claim_metrics.empty else pd.Series(dtype=float)),
+	}
+	(outdir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _series_summary(series: pd.Series) -> Dict[str, Any]:
+	clean = pd.to_numeric(series, errors="coerce").dropna()
+	if clean.empty:
+		return {"count": 0}
+	return {
+		"count": int(clean.count()),
+		"mean": float(clean.mean()),
+		"median": float(clean.median()),
+		"std": float(clean.std(ddof=0)) if clean.count() > 1 else 0.0,
+		"min": float(clean.min()),
+		"p25": float(clean.quantile(0.25)),
+		"p75": float(clean.quantile(0.75)),
+		"max": float(clean.max()),
+	}
+
+
+def _figure_path(outdir: Path, filename: str) -> Path:
+	return outdir / filename
+
+
+def _decorate_axis(ax: plt.Axes, title: str, xlabel: str, ylabel: str) -> None:
+	ax.set_title(title)
+	ax.set_xlabel(xlabel)
+	ax.set_ylabel(ylabel)
+	ax.grid(True, alpha=0.2)
+
+
+def _set_reasonable_xticks(ax: plt.Axes, left: float, right: float, max_ticks: int = 6) -> None:
+	if not math.isfinite(left) or not math.isfinite(right):
+		return
+	if left == right:
+		ax.set_xticks([left])
+		return
+	span = right - left
+	step = max(span / max_ticks, 1)
+	if span <= 20:
+		step = 1
+	else:
+		step = max(1, int(round(step / 5)) * 5)
+	start = math.floor(left / step) * step
+	stop = math.ceil(right / step) * step
+	ax.set_xticks(np.arange(start, stop + step, step))
+
+
+def _hist_plot(
+	series: pd.Series,
+	path: Path,
+	title: str,
+	xlabel: str,
+	bins: int,
+	color: str,
+	log_y: bool = False,
+	align_integer_bins: bool = False,
+) -> None:
+	fig, ax = plt.subplots(figsize=(10, 6))
+	clean = pd.to_numeric(series, errors="coerce").dropna()
+	if clean.empty:
+		ax.text(0.5, 0.5, "No data available", ha="center", va="center", transform=ax.transAxes)
+		ax.set_axis_off()
+	else:
+		if align_integer_bins:
+			left = math.floor(float(clean.min())) - 0.5
+			right = math.ceil(float(clean.max())) + 0.5
+			bin_edges = np.arange(left, right + 1.0, 1.0)
+		else:
+			bin_edges = np.histogram_bin_edges(clean, bins=bins)
+		ax.hist(clean, bins=bin_edges, color=color, edgecolor="white", alpha=0.9, log=log_y)
+		# Use integer y-axis ticks for histogram counts
+		ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+		_decorate_axis(ax, title, xlabel, "Count")
+		ax.set_xlim(bin_edges[0], bin_edges[-1])
+		if align_integer_bins:
+			start = int(math.ceil(bin_edges[0] + 0.5))
+			stop = int(math.floor(bin_edges[-1] - 0.5))
+			if start <= stop:
+				ax.set_xticks(np.arange(start, stop + 1, 1))
+			else:
+				ax.set_xticks([round(float(clean.min()))])
+		else:
+			_set_reasonable_xticks(ax, float(bin_edges[0]), float(bin_edges[-1]))
+	fig.tight_layout()
+	fig.savefig(path, dpi=160)
+	plt.close(fig)
+
+
+def _plot_turn_lengths(turn_metrics: pd.DataFrame, outdir: Path, bins: int, title_prefix: str) -> None:
+	_hist_plot(
+		turn_metrics["turn_word_len"],
+		_figure_path(outdir, "turn_lengths_words.png"),
+		f"{title_prefix}Turn Lengths" if title_prefix else "Turn Lengths",
+		"Words per turn",
+		bins,
+		"#264653",
+	)
+
+	_hist_plot(
+		turn_metrics["turn_char_len"],
+		_figure_path(outdir, "turn_lengths_chars.png"),
+		f"{title_prefix}Turn Lengths (Characters)" if title_prefix else "Turn Lengths (Characters)",
+		"Characters per turn",
+		bins,
+		"#2a9d8f",
+	)
+
+
+def _plot_claim_span_lengths(claim_metrics: pd.DataFrame, outdir: Path, bins: int, title_prefix: str) -> None:
+	_hist_plot(
+		claim_metrics["span_word_len"],
+		_figure_path(outdir, "claim_span_lengths_words.png"),
+		f"{title_prefix}Claim Span Lengths" if title_prefix else "Claim Span Lengths",
+		"Words per claim span",
+		bins,
+		"#e76f51",
+	)
+
+	_hist_plot(
+		claim_metrics["span_char_len"],
+		_figure_path(outdir, "claim_span_lengths_chars.png"),
+		f"{title_prefix}Claim Span Lengths (Characters)" if title_prefix else "Claim Span Lengths (Characters)",
+		"Characters per claim span",
+		bins,
+		"#f4a261",
+	)
+
+
+def _plot_claims_per_turn(turn_metrics: pd.DataFrame, outdir: Path, bins: int, title_prefix: str) -> None:
+	_hist_plot(
+		turn_metrics["claim_count"],
+		_figure_path(outdir, "claims_per_turn.png"),
+		f"{title_prefix}Claims per Turn" if title_prefix else "Claims per Turn",
+		"Claims in a turn",
+		min(bins, max(10, int(turn_metrics["claim_count"].max()) + 1)) if not turn_metrics.empty else bins,
+		"#6d597a",
+		align_integer_bins=True,
+	)
+
+
+def _plot_claim_density(claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str) -> None:
+	fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+	clean = claim_metrics.dropna(subset=["rel_start", "rel_len"]) if not claim_metrics.empty else claim_metrics
+	if clean.empty:
+		for ax in axes:
+			ax.text(0.5, 0.5, "No offset spans available", ha="center", va="center", transform=ax.transAxes)
+			ax.set_axis_off()
+	else:
+		axes[0].hist(clean["rel_start"], bins=40, range=(0.0, 1.0), color="#457b9d", edgecolor="white")
+		axes[0].yaxis.set_major_locator(MaxNLocator(integer=True))
+		_decorate_axis(
+			axes[0],
+			f"{title_prefix}Claim Start Location" if title_prefix else "Claim Start Location",
+			"Relative start position in turn",
+			"Claims",
+		)
+		axes[0].set_xlim(0.0, 1.0)
+
+		h = axes[1].hist2d(
+			clean["rel_start"],
+			clean["rel_len"],
+			bins=40,
+			range=[[0.0, 1.0], [0.0, 1.0]],
+			cmap="viridis",
+		)
+		_decorate_axis(
+			axes[1],
+			f"{title_prefix}Claim Start vs Relative Span Size" if title_prefix else "Claim Start vs Relative Span Size",
+			"Relative start position in turn",
+			"Span length / turn length",
+		)
+		axes[1].set_xlim(0.0, 1.0)
+		axes[1].set_ylim(0.0, 1.0)
+		fig.colorbar(h[3], ax=axes[1], label="Claims")
+
+	fig.tight_layout()
+	fig.savefig(_figure_path(outdir, "claim_density.png"), dpi=160)
+	plt.close(fig)
+
+
+def _write_tables(turn_metrics: pd.DataFrame, claim_metrics: pd.DataFrame, outdir: Path) -> None:
+	turn_metrics.to_csv(outdir / "turn_metrics.csv", index=False)
+	claim_metrics.to_csv(outdir / "claim_metrics.csv", index=False)
+
+
+def analyze(input_csv: Path, outdir: Path, bins: int, title_prefix: Optional[str]) -> None:
+	if not input_csv.exists():
+		raise FileNotFoundError(f"Input not found: {input_csv}")
+
+	outdir.mkdir(parents=True, exist_ok=True)
+	df = pd.read_csv(input_csv)
+	turn_metrics, claim_metrics = _build_metrics(df)
+
+	_write_tables(turn_metrics, claim_metrics, outdir)
+	_save_summary(turn_metrics, claim_metrics, outdir)
+
+	prefix = f"{title_prefix} - " if title_prefix else ""
+	_plot_turn_lengths(turn_metrics, outdir, bins=bins, title_prefix=prefix)
+	_plot_claim_span_lengths(claim_metrics, outdir, bins=bins, title_prefix=prefix)
+	_plot_claims_per_turn(turn_metrics, outdir, bins=bins, title_prefix=prefix)
+	_plot_claim_density(claim_metrics, outdir, title_prefix=prefix)
+
+	print(f"Analyzed {len(turn_metrics)} turns and {len(claim_metrics)} claims")
+	print(f"Wrote outputs to {outdir}")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+	args = parse_args(argv)
+	outdir = Path(__file__).resolve().parent / "output"
+	analyze(args.input_csv, outdir=outdir, bins=args.bins, title_prefix=args.title_prefix)
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

@@ -1,14 +1,17 @@
 
-"""Parse a presidential debate transcript into sentence-level rows.
+"""Parse all presidential debate transcripts into speaker turns.
 
 Input format assumptions (common in debate transcripts):
 - Spoken lines typically begin with "SPEAKER: ..." (e.g., "MUIR: Good evening...").
 - Metadata/comments may be prefixed by "#" and should be ignored.
 - Some transcripts include C-style block comments like "/* ... */"; those are ignored.
+- All transcripts should be in the 'raw' folder with filenames like "YYYYMMDD_speaker1_speaker2.txt".
 
 Output:
-- A CSV with one row per sentence and a single column: "sentence".
-- Speaker labels are removed from the sentence text.
+- A single CSV with one row per speaker turn and three columns:
+  - debate_id: extracted from filename (e.g., "trump_harris")
+  - speaker: the name of the speaker
+  - text: the spoken text
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -61,106 +64,97 @@ def _collapse_whitespace(text: str) -> str:
 	return re.sub(r"\s+", " ", text).strip()
 
 
-def split_sentences(text: str) -> List[str]:
-	"""Split text into sentences using lightweight heuristics.
+def transcript_to_speaker_turns(
+	transcript_path: Path,
+) -> List[Tuple[str, str]]:
+	"""Parse transcript file into a list of (speaker, text) tuples.
 
-	This avoids heavy dependencies (e.g., NLTK / spaCy) while handling a few
-	common abbreviations.
+	Each tuple represents a single speaker turn, which may span multiple
+	continuation lines in the input.
 	"""
-
-	text = _collapse_whitespace(text)
-	if not text:
-		return []
-
-	# Protect a handful of common abbreviations / initials.
-	protected = {
-		"Mr.": "Mr<prd>",
-		"Mrs.": "Mrs<prd>",
-		"Ms.": "Ms<prd>",
-		"Dr.": "Dr<prd>",
-		"Prof.": "Prof<prd>",
-		"Sr.": "Sr<prd>",
-		"Jr.": "Jr<prd>",
-		"St.": "St<prd>",
-		"U.S.": "US<prd>",
-		"U.K.": "UK<prd>",
-		"e.g.": "eg<prd>",
-		"i.e.": "ie<prd>",
-		"vs.": "vs<prd>",
-		"etc.": "etc<prd>",
-	}
-	for src, dst in protected.items():
-		text = text.replace(src, dst)
-
-	# Protect single-letter initials like "J.D." -> "JD<prd>".
-	text = re.sub(r"\b([A-Z])\.([A-Z])\.", r"\1\2<prd>", text)
-
-	# Split at sentence-ending punctuation when followed by space + a plausible next token.
-	parts = re.split(r"(?<=[.!?])\s+(?=(?:\"|\'|\(|\[)?[A-Z0-9])", text)
-
-	sentences: List[str] = []
-	for part in parts:
-		part = part.replace("<prd>", ".")
-		part = _collapse_whitespace(part)
-		if not part:
-			continue
-		sentences.append(part)
-
-	return sentences
-
-
-def transcript_to_sentences(transcript_path: Path) -> List[str]:
-	"""Parse transcript file into a flat list of sentences (speaker removed)."""
 
 	raw_text = transcript_path.read_text(encoding="utf-8", errors="replace")
 	lines = list(_iter_non_comment_lines(raw_text.splitlines()))
 
-	utterances: List[str] = []
-	current: Optional[str] = None
+	turns: List[Tuple[str, str]] = []
+	current_speaker: Optional[str] = None
+	current_text: Optional[str] = None
 
 	for line in lines:
 		match = SPEAKER_RE.match(line)
 		if match:
+			speaker = match.group(1)
 			spoken = match.group(2)
 			spoken = _strip_inline_comment_markers(spoken)
-			if current is not None:
-				utterances.append(_collapse_whitespace(current))
-			current = spoken
+
+			# Save previous turn if any
+			if current_speaker is not None and current_text is not None:
+				text = _collapse_whitespace(current_text)
+				if text:
+					turns.append((current_speaker, text))
+
+			current_speaker = speaker
+			current_text = spoken
 			continue
 
-		# Continuation line: append to current utterance if any, else ignore.
-		if current is None:
+		# Continuation line: append to current turn if any, else ignore.
+		if current_speaker is None:
 			continue
-		current = f"{current} {line}".strip()
+		current_text = f"{current_text} {line}".strip()
 
-	if current is not None:
-		utterances.append(_collapse_whitespace(current))
+	# Don't forget the last turn
+	if current_speaker is not None and current_text is not None:
+		text = _collapse_whitespace(current_text)
+		if text:
+			turns.append((current_speaker, text))
 
-	sentences: List[str] = []
-	for utterance in utterances:
-		for sentence in split_sentences(utterance):
-			sentence = _collapse_whitespace(sentence)
-			if sentence:
-				sentences.append(sentence)
-
-	return sentences
+	return turns
 
 
-def build_dataframe(sentences: List[str]) -> pd.DataFrame:
-	return pd.DataFrame({"sentence": sentences})
+def extract_debate_id(filename: str) -> str:
+	"""Extract debate_id from filename.
+	
+	E.g., "20240910_trump_harris.txt" -> "trump_harris"
+	"""
+	stem = Path(filename).stem
+	return stem
+
+
+def parse_all_transcripts(raw_folder: Path) -> List[Tuple[str, str, str]]:
+	"""Parse all .txt transcripts from raw folder into list of (debate_id, speaker, text) tuples."""
+	
+	all_turns: List[Tuple[str, str, str]] = []
+	
+	# Find all .txt files in raw folder
+	transcript_files = sorted(raw_folder.glob("*.txt"))
+	
+	for transcript_path in transcript_files:
+		debate_id = extract_debate_id(transcript_path.name)
+		turns = transcript_to_speaker_turns(transcript_path)
+		
+		for speaker, text in turns:
+			all_turns.append((debate_id, speaker, text))
+	
+	return all_turns
+
+
+def build_dataframe(turns: List[Tuple[str, str, str]]) -> pd.DataFrame:
+	return pd.DataFrame(turns, columns=["debate_id", "speaker", "text"])
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
 		description=(
-			"Parse a presidential debate transcript (.txt) into a sentence-level CSV. "
-			"Lines beginning with 'SPEAKER:' have the speaker removed; '#' and /* */ comments are ignored."
+			"Parse all presidential debate transcripts from the 'raw' folder "
+			"into a single speaker-turn CSV with debate_id, speaker, and text columns."
 		)
 	)
 	parser.add_argument(
-		"input",
+		"-o",
+		"--output",
 		type=Path,
-		help="Path to input transcript .txt",
+		default=Path(__file__).parent / "all_transcripts.csv",
+		help="Path to output CSV file (default: all_transcripts.csv in same folder as this script)",
 	)
 	return parser.parse_args(argv)
 
@@ -168,14 +162,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[List[str]] = None) -> int:
 	args = parse_args(argv)
 
-	if not args.input.exists():
-		raise FileNotFoundError(f"Input file not found: {args.input}")
+	raw_folder = Path(__file__).parent / "raw"
+	if not raw_folder.exists():
+		raise FileNotFoundError(f"Raw folder not found: {raw_folder}")
 
-	sentences = transcript_to_sentences(args.input)
-	df = build_dataframe(sentences)
+	turns = parse_all_transcripts(raw_folder)
+	df = build_dataframe(turns)
 
-	args.input.parent.mkdir(parents=True, exist_ok=True)
-	df.to_csv(args.input.with_suffix(".csv"), index=False)
+	args.output.parent.mkdir(parents=True, exist_ok=True)
+	df.to_csv(args.output, index=False)
+	print(f"Parsed {len(turns)} speaker turns from {len(df['debate_id'].unique())} debates")
+	print(f"Saved to {args.output}")
 
 	return 0
 

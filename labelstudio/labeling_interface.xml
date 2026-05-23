@@ -1,0 +1,20 @@
+<View>
+  <Header value="Highlight check-worthy factual claims. Leave blank if none." />
+  <Header value="Debate: $debate_id | Speaker: $speaker | Row: $row" />
+
+  <Text name="text" value="$text" />
+
+  <Labels name="labels" toName="text" choice="single">
+    <Label value="CheckWorthy" />
+  </Labels>
+
+  <TextArea
+    name="reason"
+    toName="text"
+    perRegion="true"
+    editable="true"
+    required="false"
+    rows="2"
+    placeholder="Optional: why this span is check-worthy / what to fact-check"
+  />
+</View>
