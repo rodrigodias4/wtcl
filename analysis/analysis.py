@@ -809,7 +809,7 @@ def _plot_speaker_span_coverage(
 def _plot_speaker_span_count(
     speaker_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     if speaker_metrics.empty:
         ax.text(
@@ -821,25 +821,38 @@ def _plot_speaker_span_count(
             transform=ax.transAxes,
         )
         ax.set_axis_off()
-    else:
-        df = speaker_metrics.sort_values("claim_count", ascending=False)
-        speakers = df["speaker"].tolist()
-        x = np.arange(len(speakers))
-        ax.bar(x, df["claim_count"], color="#6d597a", alpha=0.9)
-        _decorate_axis(
-            ax,
-            (
-                f"{title_prefix}Total Check-worthy Spans by Speaker"
-                if title_prefix
-                else "Total Check-worthy Spans by Speaker"
-            ),
-            "Speaker",
-            "Total spans",
-        )
-        ax.set_xticks(x)
-        ax.set_xticklabels(speakers, rotation=30, ha="right")
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.grid(visible=False, axis="both")
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, "speaker_span_counts.png"), dpi=300)
+        plt.close(fig)
+        return
+
+    # Use a consistent ordering: sort by claim_count descending
+    df = speaker_metrics.sort_values("claim_count", ascending=False)
+    speakers = df["speaker"].tolist()
+    x = np.arange(len(speakers))
+
+    width = 0.35
+    bars_spans = ax.bar(x - width / 2, df["claim_count"], width, color="#6d597a", alpha=0.9, label="Total spans")
+    bars_turns = ax.bar(x + width / 2, df["turn_count"], width, color="#2b2d42", alpha=0.9, label="Total turns")
+    ax.set_xticks(x)
+    ax.set_xticklabels(speakers, rotation=30, ha="right")
+    _decorate_axis(
+        ax,
+        (
+            f"{title_prefix}Total Check-worthy Spans and Turns by Speaker"
+            if title_prefix
+            else "Total Check-worthy Spans and Turns by Speaker"
+        ),
+        "Speaker",
+        "Count",
+    )
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.grid(visible=False, axis="both")
+
+    # Legend for both bar sets
+    handles = [bars_spans, bars_turns]
+    labels = [h.get_label() for h in handles]
+    ax.legend(handles, labels, loc="upper right")
 
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "speaker_span_counts.png"), dpi=300)
@@ -855,6 +868,7 @@ def _plot_speaker_metrics(
     _plot_speaker_spans_per_turn(speaker_metrics, outdir, title_prefix)
     _plot_speaker_span_coverage(speaker_metrics, outdir, title_prefix)
     _plot_speaker_span_count(speaker_metrics, outdir, title_prefix)
+
 
 
 def _write_tables(

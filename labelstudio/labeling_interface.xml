@@ -1,6 +1,13 @@
 <View>
+  <Style>
+    .lsf-richtext__line {
+      font-size: 22px;
+      line-height: 1.5;
+    }
+  </Style>
+  
   <Header value="Highlight check-worthy factual claims. Leave blank if none." />
-  <Header value="Debate: $debate_id | Speaker: $speaker | Row: $row" />
+  <Header value="Debate: $debate_id | Speaker: $speaker | Row: $row | ID: $id" />
 
   <Text name="text" value="$text" />
 
