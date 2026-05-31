@@ -4,24 +4,71 @@
       font-size: 22px;
       line-height: 1.5;
     }
+
+    /* Color the borders of each TextArea differently */
+    textarea[name='reason'] {
+      border: 2px solid #FF7F50 !important; /* coral */
+      border-radius: 6px;
+      box-shadow: 0 0 0 3px rgba(255,127,80,0.06);
+    }
+
+    textarea[name='region_comment'] {
+      border: 2px solid #4682B4 !important; /* steelblue */
+      border-radius: 6px;
+      box-shadow: 0 0 0 3px rgba(70,130,180,0.06);
+    }
+
+    /* Slightly different focus outline to improve accessibility */
+    textarea[name='reason']:focus,
+    textarea[name='region_comment']:focus {
+      outline: none !important;
+      box-shadow: 0 0 0 4px rgba(0,0,0,0.06), 0 0 0 6px rgba(70,130,180,0.08);
+    }
   </Style>
   
-  <Header value="Highlight check-worthy factual claims. Leave blank if none." />
-  <Header value="Debate: $debate_id | Speaker: $speaker | Row: $row | ID: $id" />
+  <Header value="Highlight check-worthy factual claims. Leave blank if none."/>
+  <Header value="Debate: $debate_id | Speaker: $speaker | Row: $row | ID: $id"/>
 
-  <Text name="text" value="$text" />
+  <Text name="text" value="$text"/>
 
   <Labels name="labels" toName="text" choice="single">
-    <Label value="CheckWorthy" />
+    <Label value="CheckWorthy"/>
   </Labels>
 
-  <TextArea
-    name="reason"
-    toName="text"
-    perRegion="true"
-    editable="true"
-    required="false"
-    rows="2"
-    placeholder="Optional: why this span is check-worthy / what to fact-check"
-  />
+  <TextArea name="reason" toName="text" perRegion="true" editable="true" required="false" rows="2" placeholder="Optional: why this span is check-worthy / what to fact-check"/>
+
+  <Choices name="reason_choice" toName="text" perRegion="true" choice="multiple" required="true">
+    <Choice value="numerical absolute"/>
+    <Choice value="vague quantitative"/>
+    <Choice value="statistic"/>
+    <Choice value="comparative/temporal"/>
+    <Choice value="ranking"/>
+    <Choice value="forecast/projection"/>
+    <Choice value="epistemic"/>
+    <Choice value="causation"/>
+    <Choice value="attribution"/>
+    <Choice value="stance/support"/>
+    <Choice value="conspiracy"/>
+    <Choice value="economy"/>
+    <Choice value="science"/>
+    <Choice value="medicine"/>
+    <Choice value="politics"/>
+    <Choice value="geopolitics"/>
+    <Choice value="terrorism"/>
+    <Choice value="nuclear warfare"/>
+    <Choice value="ethnicity/race"/>
+    <Choice value="immigration"/>
+    <Choice value="religion"/>
+    <Choice value="crime/law"/>
+    <Choice value="technology"/>
+    <Choice value="sexual orientation / gender identity"/>
+    <Choice value="gender equality"/>
+    <Choice value="environment"/>
+    <Choice value="abortion"/>
+    <Choice value="personal life"/>
+    
+    <Choice value="other"/>
+  </Choices>
+
+  <TextArea name="region_comment" toName="text" editable="true" required="false" rows="2" placeholder="Optional: comment on this task even if no region is marked CheckWorthy"/>
 </View>

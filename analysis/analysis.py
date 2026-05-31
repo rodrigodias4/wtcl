@@ -11,6 +11,7 @@ It produces summary tables and plots for:
 - claim span lengths
 - claims per turn
 - claim density by normalized position inside a turn
+- per-speaker turn and claim word-length ridgeline plots
 
 Example:
 	python analysis/analysis.py labelstudio/project-1-at-2026-05-22-21-39-fbc74640.csv \
@@ -50,6 +51,7 @@ class SpanRecord:
     end: Optional[int]
     text: str
     reason: str
+    reason_choices: List[str]
     turn_char_len: int
     turn_word_len: int
     span_char_len: Optional[int]
@@ -119,6 +121,40 @@ def _normalize_span_text(text: Any) -> str:
     if not value or value.upper() == "NULL":
         return ""
     return value
+
+
+def _parse_reason_choices(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    values: List[Any]
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, tuple):
+        values = list(raw)
+    else:
+        text = str(raw).strip()
+        if not text or text.upper() == "NULL":
+            return []
+        try:
+            loaded = json.loads(text)
+        except Exception:
+            loaded = text
+        if isinstance(loaded, list):
+            values = loaded
+        else:
+            values = [loaded]
+
+    result: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        choice = _normalize_span_text(value)
+        if not choice:
+            continue
+        if choice in seen:
+            continue
+        seen.add(choice)
+        result.append(choice)
+    return result
 
 
 def _parse_json_spans(raw: Any) -> List[Dict[str, Any]]:
@@ -196,13 +232,13 @@ def _filter_moderator_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 def _extract_spans_from_row(
     row: pd.Series, text_col: str
-) -> List[Tuple[Optional[int], Optional[int], str, str]]:
+) -> List[Tuple[Optional[int], Optional[int], str, str, List[str]]]:
     turn_text = "" if pd.isna(row.get(text_col)) else str(row.get(text_col))
     spans_col = row.get("spans") if "spans" in row.index else None
     check_span_col = (
         row.get("check_worthy_span") if "check_worthy_span" in row.index else None
     )
-    results: List[Tuple[Optional[int], Optional[int], str, str]] = []
+    results: List[Tuple[Optional[int], Optional[int], str, str, List[str]]] = []
 
     raw_spans = _parse_json_spans(spans_col)
     if raw_spans:
@@ -210,8 +246,9 @@ def _extract_spans_from_row(
             start = _safe_int(span.get("start"))
             end = _safe_int(span.get("end"))
             span_text = _normalize_span_text(span.get("text"))
-            reason = _normalize_span_text(span.get("reason"))
-            results.append((start, end, span_text, reason))
+            reason = _normalize_span_text(span.get("reason_text") or span.get("reason"))
+            reason_choices = _parse_reason_choices(span.get("reason_choices"))
+            results.append((start, end, span_text, reason, reason_choices))
         return results
 
     span_text = _normalize_span_text(check_span_col)
@@ -224,7 +261,7 @@ def _extract_spans_from_row(
     else:
         start = None
         end = None
-    results.append((start, end, span_text, ""))
+    results.append((start, end, span_text, "", []))
     return results
 
 
@@ -255,7 +292,9 @@ def _build_metrics(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         span_char_lengths: List[int] = []
         span_word_lengths: List[int] = []
 
-        for span_index, (start, end, span_text, reason) in enumerate(turn_spans):
+        for span_index, (start, end, span_text, reason, reason_choices) in enumerate(
+            turn_spans
+        ):
             span_char_len: Optional[int]
             span_word_len: Optional[int]
             rel_start: Optional[float]
@@ -300,6 +339,7 @@ def _build_metrics(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                     end=end,
                     text=span_text,
                     reason=reason,
+                    reason_choices=reason_choices,
                     turn_char_len=turn_char_len,
                     turn_word_len=turn_word_len,
                     span_char_len=span_char_len,
@@ -397,10 +437,41 @@ def _compute_speaker_metrics(
     ).reset_index(drop=True)
 
 
+def _compute_reason_choice_metrics(claim_metrics: pd.DataFrame) -> pd.DataFrame:
+    if claim_metrics.empty or "speaker" not in claim_metrics.columns:
+        return pd.DataFrame(columns=["reason_choice", "speaker", "count", "total_count"])
+
+    records: List[Dict[str, Any]] = []
+    for _, row in claim_metrics.iterrows():
+        speaker = _normalize_speaker(row.get("speaker"))
+        for choice in _parse_reason_choices(row.get("reason_choices")):
+            records.append({"reason_choice": choice, "speaker": speaker})
+
+    if not records:
+        return pd.DataFrame(columns=["reason_choice", "speaker", "count", "total_count"])
+
+    choice_counts = (
+        pd.DataFrame(records)
+        .groupby(["reason_choice", "speaker"], dropna=False)
+        .size()
+        .reset_index(name="count")
+    )
+    totals = (
+        choice_counts.groupby("reason_choice", dropna=False)["count"]
+        .sum()
+        .reset_index(name="total_count")
+    )
+    merged = choice_counts.merge(totals, on="reason_choice", how="left")
+    return merged.sort_values(
+        ["total_count", "reason_choice", "count"], ascending=[False, True, False]
+    ).reset_index(drop=True)
+
+
 def _save_summary(
     turn_metrics: pd.DataFrame,
     claim_metrics: pd.DataFrame,
     speaker_metrics: pd.DataFrame,
+    reason_choice_metrics: pd.DataFrame,
     outdir: Path,
 ) -> None:
     per_speaker: Dict[str, Dict[str, Any]] = {}
@@ -467,6 +538,19 @@ def _save_summary(
             if not claim_metrics.empty
             else pd.Series(dtype=float)
         ),
+        "reason_choice_count": (
+            int(reason_choice_metrics["count"].sum())
+            if not reason_choice_metrics.empty
+            else 0
+        ),
+        "reason_choice_totals": (
+            reason_choice_metrics.groupby("reason_choice", dropna=False)["count"]
+            .sum()
+            .sort_values(ascending=False)
+            .to_dict()
+            if not reason_choice_metrics.empty
+            else {}
+        ),
         "per_speaker": per_speaker,
     }
     (outdir / "summary.json").write_text(
@@ -498,7 +582,8 @@ def _decorate_axis(ax: plt.Axes, title: str, xlabel: str, ylabel: str) -> None:
     ax.set_title(title)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.grid(True, alpha=0.2)
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
 
 
 def _set_reasonable_xticks(
@@ -741,7 +826,6 @@ def _plot_speaker_spans_per_turn(
         ax.set_xticks(x)
         ax.set_xticklabels(speakers, rotation=30, ha="right")
         ax.yaxis.set_major_locator(MaxNLocator(integer=False))
-        ax.grid(visible=False, axis="both")
 
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "speaker_spans_per_turn.png"), dpi=300)
@@ -799,7 +883,6 @@ def _plot_speaker_span_coverage(
         ax.set_xticks(x)
         ax.set_xticklabels(speakers, rotation=30, ha="right")
         ax.legend()
-        ax.grid(visible=False, axis="both")
 
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "speaker_span_coverage.png"), dpi=300)
@@ -847,7 +930,6 @@ def _plot_speaker_span_count(
         "Count",
     )
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.grid(visible=False, axis="both")
 
     # Legend for both bar sets
     handles = [bars_spans, bars_turns]
@@ -855,12 +937,166 @@ def _plot_speaker_span_count(
     ax.legend(handles, labels, loc="upper right")
 
     fig.tight_layout()
-    fig.savefig(_figure_path(outdir, "speaker_span_counts.png"), dpi=300)
+    fig.savefig(_figure_path(outdir, "speaker_total_counts.png"), dpi=300)
+    plt.close(fig)
+
+
+def _plot_speaker_word_lengths(
+    turn_metrics: pd.DataFrame,
+    claim_metrics: pd.DataFrame,
+    outdir: Path,
+    bins: int,
+    title_prefix: str,
+) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    def _gaussian_smooth(values: np.ndarray, sigma_bins: float = 1.3) -> np.ndarray:
+        if len(values) == 0:
+            return values
+        radius = max(1, int(math.ceil(sigma_bins * 3)))
+        offsets = np.arange(-radius, radius + 1)
+        kernel = np.exp(-0.5 * (offsets / sigma_bins) ** 2)
+        kernel /= kernel.sum()
+        return np.convolve(values, kernel, mode="same")
+
+    def _plot_ridgeline(
+        ax: plt.Axes,
+        data_by_speaker: Dict[str, pd.Series],
+        subtitle: str,
+        speaker_order: List[str],
+    ) -> None:
+        clean_by_speaker = {
+            speaker: pd.to_numeric(series, errors="coerce").dropna()
+            for speaker, series in data_by_speaker.items()
+        }
+        combined = pd.concat(
+            [series for series in clean_by_speaker.values() if not series.empty],
+            ignore_index=True,
+        ) if any(not series.empty for series in clean_by_speaker.values()) else pd.Series(dtype=float)
+
+        if combined.empty:
+            ax.text(
+                0.5,
+                0.5,
+                "No speaker data available",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            return
+
+        x_min = float(combined.min())
+        x_max = float(combined.max())
+        if x_min == x_max:
+            x_min -= 0.5
+            x_max += 0.5
+
+        x_grid = np.linspace(x_min, x_max, 400)
+        bin_edges = np.histogram_bin_edges(combined, bins=bins)
+        colors = plt.get_cmap("tab10")
+        max_density = 0.0
+        ridge_data: List[Tuple[str, np.ndarray]] = []
+
+        for speaker in speaker_order:
+            series = clean_by_speaker.get(speaker, pd.Series(dtype=float))
+            if series.empty:
+                ridge_data.append((speaker, np.zeros_like(x_grid)))
+                continue
+            hist, edges = np.histogram(series.to_numpy(), bins=bin_edges, density=True)
+            centers = (edges[:-1] + edges[1:]) / 2
+            density = np.interp(x_grid, centers, hist, left=0.0, right=0.0)
+            density = _gaussian_smooth(density)
+            max_density = max(max_density, float(density.max(initial=0.0)))
+            ridge_data.append((speaker, density))
+
+        if max_density <= 0:
+            ax.text(
+                0.5,
+                0.5,
+                "No speaker data available",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            return
+
+        row_height = 1.0
+        fill_scale = 0.85
+        for idx, (speaker, density) in enumerate(ridge_data):
+            offset = idx * row_height
+            scaled = (density / max_density) * fill_scale
+            color = colors(idx % 10)
+            ax.fill_between(x_grid, offset, offset + scaled, color=color, alpha=0.75)
+            ax.plot(x_grid, offset + scaled, color=color, linewidth=1.2)
+            ax.hlines(offset, x_min, x_max, color="#444444", linewidth=0.5, alpha=0.35)
+
+        ax.set_yticks(np.arange(len(speaker_order)) * row_height)
+        ax.set_yticklabels(speaker_order)
+        ax.set_ylim(-0.4, max(0.6, (len(speaker_order) - 1) * row_height + 1.0))
+        ax.set_xlim(x_min, x_max)
+        _decorate_axis(ax, subtitle, "Words", "Speaker")
+        _set_reasonable_xticks(ax, x_min, x_max)
+
+    turn_data = (
+        turn_metrics.groupby("speaker", dropna=False)["turn_word_len"].apply(list)
+        if not turn_metrics.empty and "speaker" in turn_metrics.columns
+        else pd.Series(dtype=object)
+    )
+    claim_data = (
+        claim_metrics.groupby("speaker", dropna=False)["span_word_len"].apply(list)
+        if not claim_metrics.empty and "speaker" in claim_metrics.columns
+        else pd.Series(dtype=object)
+    )
+
+    turn_series_by_speaker = {
+        str(speaker): pd.Series(values)
+        for speaker, values in turn_data.items()
+    }
+    claim_series_by_speaker = {
+        str(speaker): pd.Series(values)
+        for speaker, values in claim_data.items()
+    }
+
+    order_source = {
+        speaker: pd.to_numeric(series, errors="coerce").dropna().median()
+        for speaker, series in turn_series_by_speaker.items()
+        if not pd.to_numeric(series, errors="coerce").dropna().empty
+    }
+    speaker_order = [speaker for speaker, _ in sorted(order_source.items(), key=lambda item: item[1])]
+    if not speaker_order:
+        speaker_order = sorted(set(turn_series_by_speaker) | set(claim_series_by_speaker))
+
+    _plot_ridgeline(
+        axes[0],
+        turn_series_by_speaker,
+        f"{title_prefix}Turn Word Lengths by Speaker"
+        if title_prefix
+        else "Turn Word Lengths by Speaker",
+        speaker_order,
+    )
+    _plot_ridgeline(
+        axes[1],
+        claim_series_by_speaker,
+        f"{title_prefix}Span Word Lengths by Speaker"
+        if title_prefix
+        else "Span Word Lengths by Speaker",
+        speaker_order,
+    )
+
+    fig.tight_layout()
+    fig.savefig(_figure_path(outdir, "speaker_word_lengths.png"), dpi=300)
     plt.close(fig)
 
 
 def _plot_speaker_metrics(
-    speaker_metrics: pd.DataFrame, outdir: Path, title_prefix: str
+    turn_metrics: pd.DataFrame,
+    claim_metrics: pd.DataFrame,
+    speaker_metrics: pd.DataFrame,
+    outdir: Path,
+    bins: int,
+    title_prefix: str,
 ) -> None:
     legacy_path = _figure_path(outdir, "speaker_metrics.png")
     if legacy_path.exists():
@@ -868,6 +1104,87 @@ def _plot_speaker_metrics(
     _plot_speaker_spans_per_turn(speaker_metrics, outdir, title_prefix)
     _plot_speaker_span_coverage(speaker_metrics, outdir, title_prefix)
     _plot_speaker_span_count(speaker_metrics, outdir, title_prefix)
+    _plot_speaker_word_lengths(turn_metrics, claim_metrics, outdir, bins=bins, title_prefix=title_prefix)
+
+
+def _plot_reason_choice_rankings(
+    reason_choice_metrics: pd.DataFrame, outdir: Path, title_prefix: str
+) -> None:
+    fig, ax = plt.subplots(figsize=(13, 7))
+
+    if reason_choice_metrics.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No reason choices available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, "reason_choice_rankings.png"), dpi=300)
+        plt.close(fig)
+        return
+
+    pivot = (
+        reason_choice_metrics.pivot_table(
+            index="reason_choice",
+            columns="speaker",
+            values="count",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .astype(float)
+    )
+    totals = pivot.sum(axis=1).sort_values(ascending=False)
+    pivot = pivot.loc[totals.index]
+    speaker_order = pivot.sum(axis=0).sort_values(ascending=False).index.tolist()
+
+    y = np.arange(len(pivot.index))
+    left = np.zeros(len(pivot.index), dtype=float)
+    colors = plt.get_cmap("tab20")
+
+    for idx, speaker in enumerate(speaker_order):
+        values = pivot[speaker].to_numpy(dtype=float)
+        if np.all(values == 0):
+            continue
+        ax.barh(
+            y,
+            values,
+            left=left,
+            color=colors(idx % 20),
+            alpha=0.9,
+            label=str(speaker),
+        )
+        left += values
+
+    for idx, total in enumerate(totals.to_numpy(dtype=float)):
+        ax.text(total + 0.15, idx, f"{int(total)}", va="center", ha="left", fontsize=9)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(pivot.index.tolist())
+    ax.invert_yaxis()
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    _decorate_axis(
+        ax,
+        (
+            f"{title_prefix}Reason Choice Frequency by Speaker"
+            if title_prefix
+            else "Reason Choice Frequency by Speaker"
+        ),
+        "Labeled spans",
+        "Reason choice",
+    )
+    ax.set_xlim(0, max(1.0, float(left.max()) * 1.12))
+
+    if speaker_order:
+        legend_cols = 2 if len(speaker_order) > 8 else 1
+        ax.legend(title="Speaker", ncol=legend_cols, loc="lower right")
+
+    fig.tight_layout()
+    fig.savefig(_figure_path(outdir, "reason_choice_rankings.png"), dpi=300)
+    plt.close(fig)
 
 
 
@@ -875,11 +1192,13 @@ def _write_tables(
     turn_metrics: pd.DataFrame,
     claim_metrics: pd.DataFrame,
     speaker_metrics: pd.DataFrame,
+    reason_choice_metrics: pd.DataFrame,
     outdir: Path,
 ) -> None:
     turn_metrics.to_csv(outdir / "turn_metrics.csv", index=False)
     claim_metrics.to_csv(outdir / "claim_metrics.csv", index=False)
     speaker_metrics.to_csv(outdir / "speaker_metrics.csv", index=False)
+    reason_choice_metrics.to_csv(outdir / "reason_choice_metrics.csv", index=False)
 
 
 def analyze(
@@ -905,16 +1224,37 @@ def analyze(
     df = _filter_moderator_rows(df)
     turn_metrics, claim_metrics = _build_metrics(df)
     speaker_metrics = _compute_speaker_metrics(turn_metrics, claim_metrics)
+    reason_choice_metrics = _compute_reason_choice_metrics(claim_metrics)
 
-    _write_tables(turn_metrics, claim_metrics, speaker_metrics, outdir)
-    _save_summary(turn_metrics, claim_metrics, speaker_metrics, outdir)
+    _write_tables(
+        turn_metrics,
+        claim_metrics,
+        speaker_metrics,
+        reason_choice_metrics,
+        outdir,
+    )
+    _save_summary(
+        turn_metrics,
+        claim_metrics,
+        speaker_metrics,
+        reason_choice_metrics,
+        outdir,
+    )
 
     prefix = f"{title_prefix} - " if title_prefix else ""
     _plot_turn_lengths(turn_metrics, outdir, bins=bins, title_prefix=prefix)
     _plot_claim_span_lengths(claim_metrics, outdir, bins=bins, title_prefix=prefix)
     _plot_claims_per_turn(turn_metrics, outdir, bins=bins, title_prefix=prefix)
     _plot_claim_density(claim_metrics, outdir, title_prefix=prefix)
-    _plot_speaker_metrics(speaker_metrics, outdir, title_prefix=prefix)
+    _plot_speaker_metrics(
+        turn_metrics,
+        claim_metrics,
+        speaker_metrics,
+        outdir,
+        bins=bins,
+        title_prefix=prefix,
+    )
+    _plot_reason_choice_rankings(reason_choice_metrics, outdir, title_prefix=prefix)
 
     print(f"Analyzed {len(turn_metrics)} turns and {len(claim_metrics)} claims")
     if not speaker_metrics.empty:
