@@ -1,7 +1,7 @@
 """Convert a Label Studio JSON export into an annotated speaker-turn CSV.
 
 This emits a schema with:
-    debate_id, speaker, text, check_worthy, spans, error
+    id, debate_id, speaker, text, check_worthy, spans, error
 
 Where `spans` is a JSON list of:
     {"start": int, "end": int, "text": str, "reason_text": str, "reason_choices": [str]}
@@ -227,6 +227,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         debate_id = str(data.get("debate_id", "")).strip()
         speaker = str(data.get("speaker", "")).strip()
+        custom_id = str(data.get("id")).strip()
 
         if row_id is None:
             # Fallback: Label Studio internal id (not stable across imports)
@@ -244,6 +245,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         spans = _extract_spans(result_list, label_value=str(args.label))
         rows.append(
             {
+                "id": custom_id,
                 "debate_id": debate_id,
                 "speaker": speaker,
                 "text": text_val,
@@ -265,12 +267,49 @@ def main(argv: Optional[List[str]] = None) -> int:
             }
         )
 
-    rows.sort(key=lambda r: (r["debate_id"], r.get("row", 0)))
+    deduped_rows: List[Dict[str, Any]] = []
+    seen_keys: set[Tuple[str, str, str, str]] = set()
+    duplicates_removed = 0
+    for row in rows:
+        key = (
+            row["debate_id"],
+            row["speaker"],
+            row["text"],
+            str(row["id"]),
+        )
+        if key in seen_keys:
+            duplicates_removed += 1
+            continue
+        seen_keys.add(key)
+        deduped_rows.append(row)
+
+    deduped_rows.sort(key=lambda r: (r["debate_id"], r["speaker"], r["text"], r["id"]))
     out_df = pd.DataFrame(
-        rows, columns=["debate_id", "speaker", "text", "check_worthy", "spans", "error"]
+        [
+            {
+                "id": row["id"],
+                "debate_id": row["debate_id"],
+                "speaker": row["speaker"],
+                "text": row["text"],
+                "check_worthy": row["check_worthy"],
+                "spans": row["spans"],
+                "error": row["error"],
+            }
+            for row in deduped_rows
+        ],
+        columns=[
+            "id",
+            "debate_id",
+            "speaker",
+            "text",
+            "check_worthy",
+            "spans",
+            "error",
+        ],
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(out, index=False)
+    print(f"Removed {duplicates_removed} duplicate rows")
     print(f"Wrote {out} ({len(out_df)} rows)")
     return 0
 

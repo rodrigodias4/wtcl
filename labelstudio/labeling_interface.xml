@@ -52,6 +52,8 @@
     <Choice value="economy"/>
     <Choice value="science"/>
     <Choice value="medicine"/>
+    <Choice value="education"/>
+    <Choice value="energy"/>
     <Choice value="politics"/>
     <Choice value="geopolitics"/>
     <Choice value="terrorism"/>
