@@ -63,6 +63,7 @@
     <Choice value="immigration"/>
     <Choice value="religion"/>
     <Choice value="crime/law"/>
+    <Choice value="narcotics"/>
     <Choice value="technology"/>
     <Choice value="sexual orientation / gender identity"/>
     <Choice value="gender equality"/>

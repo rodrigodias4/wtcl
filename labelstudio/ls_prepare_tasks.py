@@ -59,15 +59,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 		help="Column for speaker name (default: speaker)",
 	)
 	p.add_argument(
-		"--context",
-		type=int,
-		default=0,
-		help=(
-			"Number of surrounding speaker turns to include as context on each side. "
-			"Adds data.prev_text and data.next_text. (default: 0)"
-		),
-	)
-	p.add_argument(
+		"-m",
 		"--merge-export",
 		type=Path,
 		default=None,
@@ -143,10 +135,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 		if col not in df.columns:
 			raise KeyError(f"Missing column {col!r}. Available: {list(df.columns)!r}")
 
-	context_n = int(args.context)
-	if context_n < 0:
-		raise ValueError("--context must be >= 0")
-
 	# Collect valid rows in original CSV order so we can compute neighbors.
 	items: List[Dict[str, Any]] = []
 	for idx, rec in enumerate(df.to_dict(orient="records")):
@@ -190,16 +178,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 			"row": int(item["row"]),
 			"source_csv": args.input_csv.name,
 		}
-
-		if context_n > 0:
-			prev_slice = items[max(0, i - context_n) : i]
-			next_slice = items[i + 1 : i + 1 + context_n]
-			data["prev_text"] = "\n---\n".join(
-				f"{x['speaker']}: {x['text']}" for x in prev_slice
-			)
-			data["next_text"] = "\n---\n".join(
-				f"{x['speaker']}: {x['text']}" for x in next_slice
-			)
 
 		tasks.append({"data": data})
 
