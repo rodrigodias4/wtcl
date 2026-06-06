@@ -728,15 +728,22 @@ def _plot_claims_per_turn(
 def _plot_claim_density(
     claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
     clean = (
         claim_metrics.dropna(subset=["rel_start", "rel_len"])
         if not claim_metrics.empty
         else claim_metrics
     )
-    if clean.empty:
-        for ax in axes:
+
+    def _plot_single_claim_density(
+        path: Path,
+        title: str,
+        xlabel: str,
+        ylabel: str,
+        plot_fn: Any,
+        use_colorbar: bool = False,
+    ) -> None:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        if clean.empty:
             ax.text(
                 0.5,
                 0.5,
@@ -746,51 +753,49 @@ def _plot_claim_density(
                 transform=ax.transAxes,
             )
             ax.set_axis_off()
-    else:
-        axes[0].hist(
+        else:
+            result = plot_fn(ax)
+            _decorate_axis(ax, title, xlabel, ylabel)
+            ax.set_xlim(0.0, 1.0)
+            if use_colorbar and result is not None:
+                ax.set_ylim(0.0, 1.0)
+                fig.colorbar(result[3], ax=ax, label="Claims")
+        fig.tight_layout()
+        fig.savefig(path, dpi=300)
+        plt.close(fig)
+
+    _plot_single_claim_density(
+        _figure_path(outdir, "claim_start_location.png"),
+        f"{title_prefix}Claim Start Location" if title_prefix else "Claim Start Location",
+        "Relative start position in turn",
+        "Claims",
+        lambda ax: ax.hist(
             clean["rel_start"],
             bins=40,
             range=(0.0, 1.0),
             color="#457b9d",
             edgecolor="white",
-        )
-        axes[0].yaxis.set_major_locator(MaxNLocator(integer=True))
-        _decorate_axis(
-            axes[0],
-            (
-                f"{title_prefix}Claim Start Location"
-                if title_prefix
-                else "Claim Start Location"
-            ),
-            "Relative start position in turn",
-            "Claims",
-        )
-        axes[0].set_xlim(0.0, 1.0)
+        ),
+    )
 
-        h = axes[1].hist2d(
+    _plot_single_claim_density(
+        _figure_path(outdir, "claim_start_vs_relative_span_size.png"),
+        (
+            f"{title_prefix}Claim Start vs Relative Span Size"
+            if title_prefix
+            else "Claim Start vs Relative Span Size"
+        ),
+        "Relative start position in turn",
+        "Span length / turn length",
+        lambda ax: ax.hist2d(
             clean["rel_start"],
             clean["rel_len"],
             bins=40,
             range=[[0.0, 1.0], [0.0, 1.0]],
-            cmap="viridis",
-        )
-        _decorate_axis(
-            axes[1],
-            (
-                f"{title_prefix}Claim Start vs Relative Span Size"
-                if title_prefix
-                else "Claim Start vs Relative Span Size"
-            ),
-            "Relative start position in turn",
-            "Span length / turn length",
-        )
-        axes[1].set_xlim(0.0, 1.0)
-        axes[1].set_ylim(0.0, 1.0)
-        fig.colorbar(h[3], ax=axes[1], label="Claims")
-
-    fig.tight_layout()
-    fig.savefig(_figure_path(outdir, "claim_density.png"), dpi=300)
-    plt.close(fig)
+            cmap="BuPu",
+        ),
+        use_colorbar=True,
+    )
 
 
 def _plot_speaker_spans_per_turn(
@@ -812,7 +817,10 @@ def _plot_speaker_spans_per_turn(
         df = speaker_metrics.sort_values("spans_per_turn", ascending=False)
         speakers = df["speaker"].tolist()
         x = np.arange(len(speakers))
-        ax.bar(x, df["spans_per_turn"], color="#1d3557", alpha=0.9)
+        n_speakers = len(speakers)
+        colormap = plt.get_cmap("rainbow")
+        colormap = [colormap(float(idx) / float(n_speakers - 1)) if n_speakers > 1 else colormap(0.5) for idx in range(n_speakers)]
+        ax.bar(x, df["spans_per_turn"], color=colormap, alpha=0.9)
         _decorate_axis(
             ax,
             (
@@ -859,7 +867,7 @@ def _plot_speaker_span_coverage(
             df["span_chars_over_turn_chars_pct"],
             width,
             label="Chars",
-            color="#e76f51",
+            color="#309bbe",
             alpha=0.9,
         )
         ax.bar(
@@ -867,7 +875,7 @@ def _plot_speaker_span_coverage(
             df["span_words_over_turn_words_pct"],
             width,
             label="Words",
-            color="#2a9d8f",
+            color="#9449ba",
             alpha=0.9,
         )
         _decorate_axis(
@@ -915,8 +923,8 @@ def _plot_speaker_span_count(
     x = np.arange(len(speakers))
 
     width = 0.35
-    bars_spans = ax.bar(x - width / 2, df["claim_count"], width, color="#6d597a", alpha=0.9, label="Total spans")
-    bars_turns = ax.bar(x + width / 2, df["turn_count"], width, color="#2b2d42", alpha=0.9, label="Total turns")
+    bars_spans = ax.bar(x - width / 2, df["claim_count"], width, color="#8F6FA3", alpha=0.9, label="Total spans")
+    bars_turns = ax.bar(x + width / 2, df["turn_count"], width, color="#2B223F", alpha=0.9, label="Total turns")
     ax.set_xticks(x)
     ax.set_xticklabels(speakers, rotation=30, ha="right")
     _decorate_axis(
@@ -1143,7 +1151,8 @@ def _plot_reason_choice_rankings(
 
     y = np.arange(len(pivot.index))
     left = np.zeros(len(pivot.index), dtype=float)
-    colors = plt.get_cmap("tab20")
+    cmap = plt.get_cmap("rainbow")
+    n_speakers = len(speaker_order)
 
     for idx, speaker in enumerate(speaker_order):
         values = pivot[speaker].to_numpy(dtype=float)
@@ -1153,7 +1162,7 @@ def _plot_reason_choice_rankings(
             y,
             values,
             left=left,
-            color=colors(idx % 20),
+            color=cmap(float(idx) / float(n_speakers - 1)) if n_speakers > 1 else cmap(0.5),
             alpha=0.9,
             label=str(speaker),
         )
@@ -1184,6 +1193,122 @@ def _plot_reason_choice_rankings(
 
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "reason_choice_rankings.png"), dpi=300)
+    plt.close(fig)
+
+
+def _plot_reason_choice_correlation(
+    claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str
+) -> None:
+    # Expect `reason_choices` column to contain lists of choices per claim
+    if claim_metrics.empty or "reason_choices" not in claim_metrics.columns:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.text(
+            0.5,
+            0.5,
+            "No reason choice data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, "reason_choice_correlation.png"), dpi=300)
+        plt.close(fig)
+        return
+
+    # Build binary matrix of shape (n_claims, n_reason_choices)
+    records = []
+    all_choices: List[str] = []
+    for _, row in claim_metrics.iterrows():
+        raw = row.get("reason_choices")
+        # normalize to list
+        choices = []
+        if isinstance(raw, list):
+            choices = [str(x) for x in raw if x is not None]
+        elif pd.isna(raw):
+            choices = []
+        else:
+            try:
+                # maybe a JSON string
+                parsed = json.loads(str(raw))
+                if isinstance(parsed, list):
+                    choices = [str(x) for x in parsed if x is not None]
+                else:
+                    choices = [str(parsed)]
+            except Exception:
+                choices = [str(raw)] if raw else []
+
+        normalized = [_normalize_span_text(c) for c in choices]
+        normalized = [c for c in normalized if c]
+        records.append(normalized)
+        for c in normalized:
+            if c not in all_choices:
+                all_choices.append(c)
+
+    if not all_choices or len(all_choices) < 2:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.text(
+            0.5,
+            0.5,
+            "Not enough distinct reason choices for correlation",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, "reason_choice_correlation.png"), dpi=300)
+        plt.close(fig)
+        return
+
+    # Create DataFrame
+    bin_rows: List[Dict[str, int]] = []
+    for choices in records:
+        row = {choice: (1 if choice in choices else 0) for choice in all_choices}
+        bin_rows.append(row)
+
+    bin_df = pd.DataFrame(bin_rows, columns=all_choices)
+    if bin_df.empty:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.text(
+            0.5,
+            0.5,
+            "No reason choice data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, "reason_choice_correlation.png"), dpi=300)
+        plt.close(fig)
+        return
+
+    # Compute Pearson correlation matrix (suitable for binary co-occurrence / phi)
+    corr = bin_df.corr()
+
+    size = max(10.0, 0.4 * len(all_choices) + 4.0)
+    fig, ax = plt.subplots(figsize=(size, size))
+
+    im = ax.imshow(corr.to_numpy(dtype=float), cmap="coolwarm", vmin=-1, vmax=1)
+    ax.set_xticks(np.arange(len(all_choices)))
+    ax.set_yticks(np.arange(len(all_choices)))
+    ax.set_xticklabels(all_choices, rotation=45, ha="right")
+    ax.set_yticklabels(all_choices)
+    #ax.tick_params(axis="both", labelsize=9)
+    ax.set_title(
+        (f"{title_prefix}Reason Choice Correlation" if title_prefix else "Reason Choice Correlation")
+    )
+
+    # annotate
+    for i in range(len(all_choices)):
+        for j in range(len(all_choices)):
+            val = corr.iat[i, j]
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center", color="black", fontsize=8)
+
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation")
+    fig.tight_layout()
+    fig.savefig(_figure_path(outdir, "reason_choice_correlation.png"), dpi=300)
     plt.close(fig)
 
 
@@ -1255,6 +1380,7 @@ def analyze(
         title_prefix=prefix,
     )
     _plot_reason_choice_rankings(reason_choice_metrics, outdir, title_prefix=prefix)
+    _plot_reason_choice_correlation(claim_metrics, outdir, title_prefix=prefix)
 
     print(f"Analyzed {len(turn_metrics)} turns and {len(claim_metrics)} claims")
     if not speaker_metrics.empty:

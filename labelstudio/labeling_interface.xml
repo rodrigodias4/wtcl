@@ -56,6 +56,7 @@
     <Choice value="energy"/>
     <Choice value="politics"/>
     <Choice value="geopolitics"/>
+    <Choice value="defense/military"/>
     <Choice value="terrorism"/>
     <Choice value="nuclear warfare"/>
     <Choice value="ethnicity/race"/>
