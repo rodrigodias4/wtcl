@@ -764,6 +764,80 @@ def _plot_claim_density(
         fig.savefig(path, dpi=300)
         plt.close(fig)
 
+    def _plot_span_occupancy_histogram(path: Path, title: str) -> None:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        if clean.empty:
+            ax.text(
+                0.5,
+                0.5,
+                "No offset spans available",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+        else:
+            bins = np.linspace(0.0, 1.0, 41)
+            occupancy = np.zeros(len(bins) - 1, dtype=float)
+            for _, row in clean.iterrows():
+                start = row.get("rel_start")
+                end = row.get("rel_end")
+                if pd.isna(start) or pd.isna(end):
+                    continue
+                left = float(min(start, end))
+                right = float(max(start, end))
+                if right <= 0.0 or left >= 1.0:
+                    continue
+                left = max(0.0, left)
+                right = min(1.0, right)
+                start_idx = max(0, int(np.searchsorted(bins, left, side="right") - 1))
+                end_idx = min(len(occupancy) - 1, int(np.searchsorted(bins, right, side="left")))
+                occupancy[start_idx : end_idx + 1] += 1.0
+
+            x = bins[:-1] + np.diff(bins) / 2.0
+            ax.bar(
+                bins[:-1],
+                occupancy,
+                width=np.diff(bins),
+                align="edge",
+                color="#2a9d8f",
+                edgecolor="white",
+                alpha=0.82,
+            )
+
+            finite_mask = np.isfinite(x) & np.isfinite(occupancy)
+            if finite_mask.sum() >= 3:
+                centered_x = x[finite_mask] - 0.5
+                centered_y = occupancy[finite_mask]
+                max_degree = min(5, len(centered_x) - 1)
+                if max_degree >= 1:
+                    coeffs = np.polyfit(centered_x, centered_y, deg=max_degree)
+                    approximation = np.poly1d(coeffs)(x - 0.5)
+                    approximation = np.clip(approximation, 0.0, None)
+                    ax.plot(
+                        x,
+                        approximation,
+                        color="#e76f51",
+                        linewidth=2.2,
+                        linestyle="--",
+                        label=f"Taylor approximation (deg {max_degree})",
+                    )
+
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+            _decorate_axis(
+                ax,
+                title,
+                "Normalized position in turn",
+                "Span Occurrences",
+            )
+            ax.set_xlim(0.0, 1.0)
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(loc="upper right")
+
+        fig.tight_layout()
+        fig.savefig(path, dpi=300)
+        plt.close(fig)
+
     _plot_single_claim_density(
         _figure_path(outdir, "claim_start_location.png"),
         f"{title_prefix}Claim Start Location" if title_prefix else "Claim Start Location",
@@ -775,6 +849,33 @@ def _plot_claim_density(
             range=(0.0, 1.0),
             color="#457b9d",
             edgecolor="white",
+        ),
+    )
+
+    _plot_single_claim_density(
+        _figure_path(outdir, "claim_relative_span_size.png"),
+        (
+            f"{title_prefix}Claim Relative Span Size"
+            if title_prefix
+            else "Claim Relative Span Size"
+        ),
+        "Span length / turn length",
+        "Claims",
+        lambda ax: ax.hist(
+            clean["rel_len"],
+            bins=40,
+            range=(0.0, 1.0),
+            color="#8e44ad",
+            edgecolor="white",
+        ),
+    )
+
+    _plot_span_occupancy_histogram(
+        _figure_path(outdir, "claim_span_occupancy.png"),
+        (
+            f"{title_prefix}Claim Span Occupancy"
+            if title_prefix
+            else "Claim Span Occupancy"
         ),
     )
 
@@ -818,8 +919,8 @@ def _plot_speaker_spans_per_turn(
         speakers = df["speaker"].tolist()
         x = np.arange(len(speakers))
         n_speakers = len(speakers)
-        colormap = plt.get_cmap("rainbow")
-        colormap = [colormap(float(idx) / float(n_speakers - 1)) if n_speakers > 1 else colormap(0.5) for idx in range(n_speakers)]
+        colormap = plt.get_cmap("PuBu_r")
+        colormap = [colormap(float(idx) / float(n_speakers + 4)) if n_speakers > 1 else colormap(0.5) for idx in range(n_speakers)]
         ax.bar(x, df["spans_per_turn"], color=colormap, alpha=0.9)
         _decorate_axis(
             ax,
