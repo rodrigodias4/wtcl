@@ -10,6 +10,7 @@ It produces summary tables and plots for:
 - speaker turn lengths
 - claim span lengths
 - claims per turn
+- total spans and turns per debate, stacked by speaker
 - claim density by normalized position inside a turn
 - per-speaker turn and claim word-length ridgeline plots
 
@@ -33,6 +34,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
+from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 import shutil
@@ -44,6 +46,7 @@ WORD_RE = re.compile(r"\S+")
 
 @dataclass
 class SpanRecord:
+    debate_id: str
     turn_index: int
     span_index: int
     speaker: str
@@ -191,6 +194,15 @@ def _normalize_speaker(value: Any) -> str:
     return text if text else "UNKNOWN"
 
 
+def _normalize_debate_id(value: Any) -> str:
+    if value is None:
+        return "UNKNOWN"
+    if isinstance(value, float) and math.isnan(value):
+        return "UNKNOWN"
+    text = str(value).strip()
+    return text if text else "UNKNOWN"
+
+
 def _normalize_id_token(value: Any) -> str:
     if value is None:
         return ""
@@ -277,6 +289,7 @@ def _build_metrics(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     claim_rows: List[SpanRecord] = []
 
     for turn_index, (_, row) in enumerate(df.iterrows()):
+        debate_id = _normalize_debate_id(row.get("debate_id"))
         speaker = (
             _normalize_speaker(row.get(speaker_col))
             if speaker_col is not None
@@ -332,6 +345,7 @@ def _build_metrics(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
             claim_rows.append(
                 SpanRecord(
+                    debate_id=debate_id,
                     turn_index=turn_index,
                     span_index=span_index,
                     speaker=speaker,
@@ -352,6 +366,7 @@ def _build_metrics(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         turn_rows.append(
             {
+                "debate_id": debate_id,
                 "turn_index": turn_index,
                 "speaker": speaker,
                 "turn_char_len": turn_char_len,
@@ -578,6 +593,12 @@ def _figure_path(outdir: Path, filename: str) -> Path:
     return outdir / filename
 
 
+def _debate_year_label(debate_id: Any) -> str:
+    text = _normalize_debate_id(debate_id)
+    match = re.search(r"(19|20)\d{2}", text)
+    return match.group(0) if match else text
+
+
 def _decorate_axis(ax: plt.Axes, title: str, xlabel: str, ylabel: str) -> None:
     ax.set_title(title)
     ax.set_xlabel(xlabel)
@@ -723,6 +744,206 @@ def _plot_claims_per_turn(
         "#6d597a",
         align_integer_bins=True,
     )
+
+
+def _plot_debate_totals_by_speaker(
+    turn_metrics: pd.DataFrame,
+    claim_metrics: pd.DataFrame,
+    outdir: Path,
+    title_prefix: str,
+) -> None:
+    fig, ax = plt.subplots(figsize=(13, 7))
+
+    has_turn_debates = not turn_metrics.empty and "debate_id" in turn_metrics.columns
+    has_claim_debates = not claim_metrics.empty and "debate_id" in claim_metrics.columns
+    if not has_turn_debates and not has_claim_debates:
+        ax.text(
+            0.5,
+            0.5,
+            "No debate_id data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, "debate_total_spans_turns.png"), dpi=300)
+        plt.close(fig)
+        return
+
+    turn_source = (
+        turn_metrics.dropna(subset=["debate_id", "speaker"])
+        if has_turn_debates
+        else pd.DataFrame(columns=["debate_id", "speaker"])
+    )
+    claim_source = (
+        claim_metrics.dropna(subset=["debate_id", "speaker"])
+        if has_claim_debates
+        else pd.DataFrame(columns=["debate_id", "speaker"])
+    )
+
+    if turn_source.empty and claim_source.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No debate_id data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, "debate_total_spans_turns.png"), dpi=300)
+        plt.close(fig)
+        return
+
+    turn_pivot = (
+        turn_source.pivot_table(
+            index="debate_id",
+            columns="speaker",
+            values="turn_index",
+            aggfunc="count",
+            fill_value=0,
+        )
+        if not turn_source.empty
+        else pd.DataFrame()
+    )
+    span_pivot = (
+        claim_source.pivot_table(
+            index="debate_id",
+            columns="speaker",
+            values="span_index",
+            aggfunc="count",
+            fill_value=0,
+        )
+        if not claim_source.empty
+        else pd.DataFrame()
+    )
+
+    debates = sorted(set(turn_pivot.index) | set(span_pivot.index))
+    if not debates:
+        ax.text(
+            0.5,
+            0.5,
+            "No debate_id data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, "debate_total_spans_turns.png"), dpi=300)
+        plt.close(fig)
+        return
+
+    turn_pivot = turn_pivot.reindex(debates, fill_value=0)
+    span_pivot = span_pivot.reindex(debates, fill_value=0)
+    speaker_order = (
+        pd.concat([
+            turn_pivot.sum(axis=0),
+            span_pivot.sum(axis=0),
+        ], axis=1)
+        .fillna(0)
+        .sum(axis=1)
+        .sort_values(ascending=False)
+        .index.tolist()
+    )
+
+    x = np.arange(len(debates))
+    width = 0.36
+    speaker_cmap = plt.get_cmap("tab20")
+    speaker_colors = {
+        speaker: speaker_cmap(
+            float(idx) / float(max(1, len(speaker_order) - 1))
+        )
+        if len(speaker_order) > 1
+        else speaker_cmap(0.5)
+        for idx, speaker in enumerate(speaker_order)
+    }
+
+    for offset, pivot in [
+        (-width / 2, turn_pivot),
+        (width / 2, span_pivot),
+    ]:
+        bottoms = np.zeros(len(debates), dtype=float)
+        for speaker in speaker_order:
+            values = (
+                pivot[speaker].to_numpy(dtype=float)
+                if speaker in pivot.columns
+                else np.zeros(len(debates), dtype=float)
+            )
+            if np.all(values == 0):
+                continue
+            ax.bar(
+                x + offset,
+                values,
+                width,
+                bottom=bottoms,
+                color=speaker_colors[speaker],
+                edgecolor="white",
+                linewidth=0.6,
+                alpha=0.95,
+            )
+            bottoms += values
+
+        for idx, total in enumerate(bottoms):
+            if total > 0:
+                ax.text(
+                    x[idx] + offset,
+                    total + max(0.1, total * 0.015),
+                    f"{int(total)}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
+
+    _decorate_axis(
+        ax,
+        (
+            f"{title_prefix}Total Spans and Turns per Debate by Speaker"
+            if title_prefix
+            else "Total Spans and Turns per Debate by Speaker"
+        ),
+        "Debate",
+        "Count",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        [_debate_year_label(debate) for debate in debates], rotation=30, ha="right"
+    )
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+    max_total = 0.0
+    if not turn_pivot.empty:
+        max_total = max(max_total, float(turn_pivot.sum(axis=1).max()))
+    if not span_pivot.empty:
+        max_total = max(max_total, float(span_pivot.sum(axis=1).max()))
+    if max_total > 0:
+        ax.set_ylim(0, max_total * 1.12)
+
+    speaker_handles = [
+        Patch(facecolor=speaker_colors[speaker], edgecolor="white", label=str(speaker))
+        for speaker in speaker_order
+    ]
+    if speaker_handles:
+        ax.legend(
+            handles=speaker_handles,
+            title="Speaker",
+            loc="upper left",
+            bbox_to_anchor=(1.01, 1.0),
+        )
+
+    fig.text(
+        0.08,
+        0.92,
+        "Left bar = Turns, Right bar = Spans",
+        ha="left",
+        va="top",
+        fontsize=10,
+    )
+    fig.tight_layout()
+    fig.savefig(_figure_path(outdir, "debate_total_spans_turns.png"), dpi=300)
+    plt.close(fig)
 
 
 def _plot_claim_density(
@@ -968,7 +1189,7 @@ def _plot_speaker_span_coverage(
             df["span_chars_over_turn_chars_pct"],
             width,
             label="Chars",
-            color="#309bbe",
+            color="#20578b",
             alpha=0.9,
         )
         ax.bar(
@@ -976,7 +1197,7 @@ def _plot_speaker_span_coverage(
             df["span_words_over_turn_words_pct"],
             width,
             label="Words",
-            color="#9449ba",
+            color="#6a96d2",
             alpha=0.9,
         )
         _decorate_axis(
@@ -1471,6 +1692,7 @@ def analyze(
     _plot_turn_lengths(turn_metrics, outdir, bins=bins, title_prefix=prefix)
     _plot_claim_span_lengths(claim_metrics, outdir, bins=bins, title_prefix=prefix)
     _plot_claims_per_turn(turn_metrics, outdir, bins=bins, title_prefix=prefix)
+    _plot_debate_totals_by_speaker(turn_metrics, claim_metrics, outdir, title_prefix=prefix)
     _plot_claim_density(claim_metrics, outdir, title_prefix=prefix)
     _plot_speaker_metrics(
         turn_metrics,
