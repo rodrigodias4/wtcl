@@ -37,7 +37,7 @@
 
   <TextArea name="reason" toName="text" perRegion="true" editable="true" required="false" rows="2" placeholder="Optional: why this span is check-worthy / what to fact-check"/>
 
-  <Choices name="reason_choice" toName="text" perRegion="true" choice="multiple" required="true">
+  <Choices name="reason_choice" toName="text" perRegion="true" choice="multiple" required="true" layout="select">
     <Choice value="numerical absolute"/>
     <Choice value="vague quantitative"/>
     <Choice value="statistic"/>
@@ -49,6 +49,7 @@
     <Choice value="attribution"/>
     <Choice value="stance/support"/>
     <Choice value="conspiracy"/>
+    <Choice value="anecdote"/>
     <Choice value="economy"/>
     <Choice value="science"/>
     <Choice value="medicine"/>
@@ -69,6 +70,7 @@
     <Choice value="gender equality"/>
     <Choice value="environment"/>
     <Choice value="abortion"/>
+    <Choice value="euthanasia"/>
     <Choice value="personal life"/>
     
     <Choice value="other"/>
