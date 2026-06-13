@@ -13,10 +13,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Convert spans to BIO format")
     parser.add_argument("input_file", type=str, help="Path to input CSV file")
     parser.add_argument("-t", "--tokenizer", type=str, default=MODEL, help="Tokenizer model name")
+    parser.add_argument("--keep_token", action="store_true", help="Whether to zip the tokens with the BIO labels in the output")
     return parser.parse_args()
 
 
-def spans_to_bio(text, spans):
+def spans_to_bio(text, spans, keep_token):
     encoding = tokenizer(
         text,
         return_offsets_mapping=True,
@@ -39,11 +40,11 @@ def spans_to_bio(text, spans):
                 matching_tokens.append(i)
 
         if matching_tokens:
-            labels[matching_tokens[0]] = "B-CHECK"
+            labels[matching_tokens[0]] = "B"
             for idx in matching_tokens[1:]:
-                labels[idx] = "I-CHECK"
+                labels[idx] = "I"
 
-    return list(zip(tokens, labels))
+    return list(zip(tokens, labels)) if keep_token else labels
 
 def main():
     args = parse_args()
@@ -58,7 +59,7 @@ def main():
     for index, row in tqdm(data.iterrows()):
         text = row["text"]
         spans = json.loads(row["spans"])
-        bio_labels = spans_to_bio(text, spans)
+        bio_labels = spans_to_bio(text, spans, args.keep_token)
         data.at[index, "bio_labels"] = json.dumps(bio_labels, ensure_ascii=False)
     
     data.drop(columns=["spans","error","check_worthy"], inplace=True)
