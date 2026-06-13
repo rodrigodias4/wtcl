@@ -43,6 +43,7 @@ IGNORE_MODERATORS = True
 
 WORD_RE = re.compile(r"\S+")
 
+ORDER_LAST_APPEARANCE = ["GORE", "KERRY", "BUSH", "MCCAIN", "ROMNEY", "OBAMA", "CLINTON", "BIDEN", "TRUMP", "HARRIS"]
 
 @dataclass
 class SpanRecord:
@@ -1404,7 +1405,7 @@ def _plot_speaker_word_lengths(
         f"{title_prefix}Turn Word Lengths by Speaker"
         if title_prefix
         else "Turn Word Lengths by Speaker",
-        speaker_order,
+        ORDER_LAST_APPEARANCE,
     )
     _plot_ridgeline(
         axes[1],
@@ -1412,7 +1413,7 @@ def _plot_speaker_word_lengths(
         f"{title_prefix}Span Word Lengths by Speaker"
         if title_prefix
         else "Span Word Lengths by Speaker",
-        speaker_order,
+        ORDER_LAST_APPEARANCE,
     )
 
     fig.tight_layout()
