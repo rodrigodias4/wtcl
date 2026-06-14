@@ -212,7 +212,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"Clipped {removed} rows")"""
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    preprocessed.to_csv(out, index=False)
+    preprocessed.sort_values("id").to_csv(out, index=False)
 
     print(f"Kept {len(preprocessed)} rows")
     print(f"Wrote {out}")
