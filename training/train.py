@@ -1,6 +1,7 @@
 import argparse
 import ast
 from datetime import datetime
+import gc
 import json
 import os
 from pathlib import Path
@@ -23,14 +24,23 @@ from transformers import (
 from transformers.utils import logging
 from torchcrf import CRF
 
-from plot import plot_train_loss_curve
-from utils import MODEL_DEFAULT, get_validation_debate, label2id, id2label, label_list
+from plot import plot_metric_curves, plot_train_loss_curve, plot_train_val_loss_curves
+from utils import (
+    MODEL_DEFAULT,
+    decay_group,
+    get_optimizer,
+    get_validation_debate,
+    label2id,
+    id2label,
+    label_list,
+    no_decay_group,
+)
 
 logging.set_verbosity_error()
 logging.disable_progress_bar()
 
 MAX_LENGTH = 512
-EARLY_STOPPING_DELTA = 0.02
+EARLY_STOPPING_DELTA = 0.01
 PATIENCE = 3
 
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -63,7 +73,7 @@ def get_model_output_dir(dataset_name: str) -> Path:
         Path(os.path.dirname(os.path.abspath(__file__)))
         / "models"
         / dataset_name
-        / datetime.now().strftime("%Y-%m-%d-%H-%M")
+        / datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     )
 
 
@@ -135,19 +145,25 @@ def get_tokenizer(model_name: str) -> AutoTokenizer:
     return AutoTokenizer.from_pretrained(model_name)
 
 
-def encode(text: torch.Tensor, labels: torch.Tensor, tokenizer: AutoTokenizer) -> dict:
+def encode(
+    text: torch.Tensor,
+    labels: torch.Tensor,
+    tokenizer: AutoTokenizer,
+    max_length: int,
+) -> dict:
     # Pad labels to match the length of input_ids
-    if len(labels) < MAX_LENGTH:
-        labels += ["O"] * (MAX_LENGTH - len(labels))
-    elif len(labels) > MAX_LENGTH:
+    if len(labels) < max_length:
+        labels += ["O"] * (max_length - len(labels))
+    elif len(labels) > max_length:
         raise ValueError(
-            f"Warning: Labels length {len(labels)} exceeds MAX_LENGTH {MAX_LENGTH}."
+            f"Warning: Labels length {len(labels)} exceeds max_length {max_length}."
         )
     enc = tokenizer(
         text,
+        add_special_tokens=False,
         truncation=True,
         padding="max_length",
-        max_length=MAX_LENGTH,
+        max_length=max_length,
     )
 
     enc["labels"] = [label2id[label] for label in labels]
@@ -167,7 +183,12 @@ class WTCLDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         item = self.data[idx]
 
-        enc = encode(item["text"], ast.literal_eval(item["labels"]), self.tokenizer)
+        enc = encode(
+            item["text"],
+            ast.literal_eval(item["labels"]),
+            self.tokenizer,
+            self.max_length,
+        )
 
         input_ids = torch.tensor(enc["input_ids"], dtype=torch.long)
         attention_mask = torch.tensor(enc["attention_mask"], dtype=torch.long)
@@ -308,7 +329,7 @@ def train(
     model_results["training_loss"] = []
     model_results["validation_loss"] = []
     model_results["validation_metrics"] = []
-    best_val_loss = float("inf")
+    best_macro_f1 = -1.0
     epochs_no_improve = 0
     for epoch in tqdm(range(epochs), leave=False, desc="Training Epochs"):
         model.train()
@@ -363,19 +384,21 @@ def train(
             )
 
             # Early stopping
-            if (val_loss < best_val_loss - EARLY_STOPPING_DELTA):
-                best_val_loss = val_loss
+            if validation_metrics["macro"]["f1"] > best_macro_f1 + EARLY_STOPPING_DELTA:
+                best_macro_f1 = validation_metrics["macro"]["f1"]
                 epochs_no_improve = 0
             else:
                 epochs_no_improve += 1
 
             if epochs_no_improve >= PATIENCE:
                 tqdm.write(
-                    f"\tEarly stopping at epoch {epoch} due to no improvement in validation loss."
+                    f"\tEarly stopping at epoch {epoch} due to no improvement in validation f1."
                 )
                 break
         else:
             tqdm.write(f"Epoch {epoch}: TL={training_loss:.4f}")
+        gc.collect()
+        torch.cuda.empty_cache()
     return model_results
 
 
@@ -393,16 +416,30 @@ def train_lodo(
     tokenizer = get_tokenizer(model_name)
     val_loader = None
 
+    print(f"Training with model '{model_name}'\nHyperparameters:")
+    [print(f"\t{k}: {v}") for k, v in hparams.items()]
+    print(f"Leave-one-debate-out training on {len(all_debates)} debates.")
+    print(f"Validation enabled: {val}")
+
     # Leave-one-debate-out
-    for debate in tqdm(all_debates, desc="Leave-One-Debate-Out Folds", leave=True):
-        remaining_debates = [d for d in all_debates if d != debate]
+    for test_debate in tqdm(all_debates, desc="Leave-One-Debate-Out Folds", leave=True):
+        remaining_debates = [d for d in all_debates if d != test_debate]
         if val:
             val_debate = get_validation_debate(df, remaining_debates)
             val_data = df[df["debate_id"] == val_debate]
-            train_data = train_data = df[df["debate_id"] not in [debate, val_debate]]
+            train_data = df[~df["debate_id"].isin([test_debate, val_debate])]
+            assert (
+                not train_data["debate_id"].isin([test_debate, val_debate]).any()
+            ), "Training debates should not include test or validation debate"
+            tqdm.write(
+                f"Validating on debate: {val_debate} | Train size: {len(train_data)} | Val size: {len(val_data)}"
+            )
         else:
-            train_data = df[df["debate_id"] != debate]
-        test_data = df[df["debate_id"] == debate]
+            train_data = df[df["debate_id"] != test_debate]
+            assert not (
+                train_data["debate_id"] == test_debate
+            ).any(), "Training debates should not include test debate"
+        test_data = df[df["debate_id"] == test_debate]
 
         # Prepare datasets and dataloaders
         train_dataset = WTCLDataset(
@@ -428,7 +465,7 @@ def train_lodo(
         model = build_model(model_name, {"dropout": hparams["dropout"]})
 
         # Set up optimizer and scheduler
-        optimizer = AdamW(model.parameters(), lr=2e-5, weight_decay=0.01)
+        optimizer = get_optimizer(model, hparams)
 
         total_steps = len(train_loader) * hparams["num_epochs"]
 
@@ -439,7 +476,7 @@ def train_lodo(
         )
 
         # Train the model
-        tqdm.write(f"Training model with debate '{debate}' left out for testing.")
+        tqdm.write(f"Training model with debate '{test_debate}' left out for testing.")
         model_results = train(
             model,
             train_loader,
@@ -451,7 +488,7 @@ def train_lodo(
         )
 
         # Save the model for this debate
-        with (model_output_dir / f"{debate}").open("wb") as f:
+        with (model_output_dir / f"{test_debate}").open("wb") as f:
             torch.save(model.state_dict(), f)
 
         # Evaluate the model on the test debate
@@ -459,9 +496,9 @@ def train_lodo(
         test_metrics = compute_metrics_token_level(preds, labels)
         model_results["test_metrics"] = test_metrics
         tqdm.write(
-            f"Debate '{debate}' - Macro F1: {test_metrics['macro']['f1']:.4f}"
+            f"Debate '{test_debate}' - Macro F1: {test_metrics['macro']['f1']:.4f}"
         )
-        results[debate] = model_results
+        results[test_debate] = model_results
         del (
             model,
             train_loader,
@@ -469,6 +506,8 @@ def train_lodo(
             train_dataset,
             test_dataset,
         )  # Free up memory
+        gc.collect()
+        torch.cuda.empty_cache()
 
     results["overall"] = {}
     results["overall"]["macro"] = {}
@@ -496,7 +535,9 @@ def process_results(results: dict, output_dir: Path) -> None:
     # Print overall results
     print("\nOverall Results:")
     for debate, metrics in results.items():
-        print(f"Debate '{debate}': Macro F1 = {metrics['test_macro_f1']:.4f}")
+        print(
+            f"Debate '{debate}': Macro F1 = {metrics['test_metrics']['macro']['f1']:.4f}"
+        )
 
     print(f"Overall Macro F1: {results['overall']['macro']['f1']:.4f}")
 
@@ -505,6 +546,16 @@ def process_results(results: dict, output_dir: Path) -> None:
         json.dump(results, f, indent=4)
 
     plot_train_loss_curve(results, output_dir / "training_loss_curve.png")
+
+    if all(
+        [
+            results[debate].get("validation_metrics") is not None
+            for debate in results
+            if debate != "overall"
+        ]
+    ):
+        plot_train_val_loss_curves(results, output_dir / "train_val_loss_curves.png")
+        plot_metric_curves(results, output_dir / "validation_metrics.png")
 
 
 # -------------------------------
@@ -533,7 +584,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=0.001,
+        default=2e-5,
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
@@ -541,6 +592,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.1,
         help="Warmup ratio for learning rate scheduler.",
+    )
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.01,
+        help="Weight decay for the optimizer.",
     )
     parser.add_argument(
         "--model_name",
@@ -569,7 +626,16 @@ def main():
     model_output_dir = get_model_output_dir(args.dataset_name)
     model_output_dir.mkdir(exist_ok=True, parents=True)
 
-    results = train_lodo(df, args.model_name, vars(args), args.val, model_output_dir)
+    hparams = {
+        "dropout": args.dropout,
+        "num_epochs": args.num_epochs,
+        "batch_size": args.batch_size,
+        "lr": args.learning_rate,
+        "warmup_ratio": args.warmup_ratio,
+        "weight_decay": args.weight_decay,
+    }
+    results = train_lodo(df, args.model_name, hparams, args.val, model_output_dir)
+    results["hyperparameters"] = hparams
 
     process_results(results, model_output_dir)
 

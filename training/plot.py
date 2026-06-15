@@ -8,7 +8,7 @@ PLOT_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]  # extend if needed
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 
-def plot_metric_curves(results):
+def plot_metric_curves(results, output_file: Path):
     plt.figure(figsize=(10, 6))
 
     for i, (model_name, metrics) in enumerate(results.items()):
@@ -66,10 +66,10 @@ def plot_metric_curves(results):
     plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig(script_dir / "figures" / "validation_macro_f1.png")
+    plt.savefig(output_file, dpi=300)
 
 
-def plot_train_val_loss_curves(results):
+def plot_train_val_loss_curves(results, output_file: Path):
     train_color = "tab:blue"
     val_color = "tab:orange"
 
@@ -117,7 +117,7 @@ def plot_train_val_loss_curves(results):
 
     plt.legend(handles=[train_line, val_line])
     plt.tight_layout()
-    plt.savefig(script_dir / "figures" / "loss_curves.png")
+    plt.savefig(output_file, dpi=300)
 
 
 def plot_train_loss_curve(results, output_file: Path):
@@ -146,6 +146,10 @@ def plot_train_loss_curve(results, output_file: Path):
     plt.savefig(output_file, dpi=300)
     plt.close()
 
+
+def plot_confusion_matrix(results: dict, output_file: Path):
+    # Placeholder for confusion matrix plotting logic
+    pass
 
 def parse_args():
     parser = argparse.ArgumentParser(

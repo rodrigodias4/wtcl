@@ -1,6 +1,9 @@
 import pandas as pd
+import torch
 
 MODEL_DEFAULT = "distilroberta-base"
+
+CRF_LEARNING_RATE_MULTIPLIER = 10
 
 # Label mapping
 label_list = ["O", "B", "I"]
@@ -34,3 +37,59 @@ def get_validation_debate(df: pd.DataFrame, debates: list[str]) -> str:
     )
 
     return val_debate
+
+
+def decay_group(module):
+    return [
+        p
+        for n, p in module.named_parameters()
+        if p.requires_grad and "bias" not in n and "LayerNorm.weight" not in n
+    ]
+
+
+def no_decay_group(module):
+    return [
+        p
+        for n, p in module.named_parameters()
+        if p.requires_grad and ("bias" in n or "LayerNorm.weight" in n)
+    ]
+
+
+def get_optimizer(model, hparams):
+    return torch.optim.AdamW(
+        [
+            # Transformer
+            {
+                "params": decay_group(model.transformer),
+                "lr": hparams["lr"],
+                "weight_decay": hparams["weight_decay"],
+            },
+            {
+                "params": no_decay_group(model.transformer),
+                "lr": hparams["lr"],
+                "weight_decay": 0.0,
+            },
+            # FC layer
+            {
+                "params": decay_group(model.fc),
+                "lr": hparams["lr"],
+                "weight_decay": hparams["weight_decay"],
+            },
+            {
+                "params": no_decay_group(model.fc),
+                "lr": hparams["lr"],
+                "weight_decay": 0.0,
+            },
+            # CRF
+            {
+                "params": decay_group(model.crf),
+                "lr": hparams["lr"] * CRF_LEARNING_RATE_MULTIPLIER,
+                "weight_decay": 0.0,  # IMPORTANT: no decay on CRF
+            },
+            {
+                "params": no_decay_group(model.crf),
+                "lr": hparams["lr"] * CRF_LEARNING_RATE_MULTIPLIER,
+                "weight_decay": 0.0,
+            },
+        ]
+    )
