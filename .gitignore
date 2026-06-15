@@ -220,3 +220,6 @@ analysis/output/
 datasets/
 README.md
 *:Zone.Identifier
+
+training/models
+training/*.json

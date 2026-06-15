@@ -56,40 +56,43 @@ def no_decay_group(module):
 
 
 def get_optimizer(model, hparams):
-    return torch.optim.AdamW(
-        [
-            # Transformer
-            {
-                "params": decay_group(model.transformer),
-                "lr": hparams["lr"],
-                "weight_decay": hparams["weight_decay"],
-            },
-            {
-                "params": no_decay_group(model.transformer),
-                "lr": hparams["lr"],
-                "weight_decay": 0.0,
-            },
-            # FC layer
-            {
-                "params": decay_group(model.fc),
-                "lr": hparams["lr"],
-                "weight_decay": hparams["weight_decay"],
-            },
-            {
-                "params": no_decay_group(model.fc),
-                "lr": hparams["lr"],
-                "weight_decay": 0.0,
-            },
-            # CRF
-            {
-                "params": decay_group(model.crf),
-                "lr": hparams["lr"] * CRF_LEARNING_RATE_MULTIPLIER,
-                "weight_decay": 0.0,  # IMPORTANT: no decay on CRF
-            },
-            {
-                "params": no_decay_group(model.crf),
-                "lr": hparams["lr"] * CRF_LEARNING_RATE_MULTIPLIER,
-                "weight_decay": 0.0,
-            },
-        ]
-    )
+    optimizer_params = [
+        # Transformer
+        {
+            "params": decay_group(model.transformer),
+            "lr": hparams["lr"],
+            "weight_decay": hparams["weight_decay"],
+        },
+        {
+            "params": no_decay_group(model.transformer),
+            "lr": hparams["lr"],
+            "weight_decay": 0.0,
+        },
+        # FC layer
+        {
+            "params": decay_group(model.fc),
+            "lr": hparams["lr"],
+            "weight_decay": hparams["weight_decay"],
+        },
+        {
+            "params": no_decay_group(model.fc),
+            "lr": hparams["lr"],
+            "weight_decay": 0.0,
+        },
+    ]
+    if model.use_crf:
+        optimizer_params.extend(
+            [
+                {
+                    "params": decay_group(model.crf),
+                    "lr": hparams["lr"] * CRF_LEARNING_RATE_MULTIPLIER,
+                    "weight_decay": 0.0,  # IMPORTANT: no decay on CRF
+                },
+                {
+                    "params": no_decay_group(model.crf),
+                    "lr": hparams["lr"] * CRF_LEARNING_RATE_MULTIPLIER,
+                    "weight_decay": 0.0,
+                },
+            ]
+        )
+    return torch.optim.AdamW(optimizer_params)

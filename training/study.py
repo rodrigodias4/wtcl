@@ -32,6 +32,7 @@ from utils import (
 )
 
 datetime_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+study_trials = {}
 
 # -----------------------------------------
 # Hyperparameter tuning with Optuna
@@ -98,7 +99,7 @@ def objective(
             train_val_debates,
         )  # Free up memory
 
-        model = build_model(model_name, hparams)
+        model = build_model(model_name, hparams | fixed_hparams)
         optimizer = get_optimizer(model, hparams)
         total_steps = len(train_loader) * fixed_hparams["num_epochs"]
         scheduler = get_linear_schedule_with_warmup(
@@ -131,17 +132,11 @@ def objective(
         [metrics["validation_metrics"][-1]["macro"]["f1"] for metrics in fold_metrics]
     ) / len(fold_metrics)
 
-    with study_output_path.open("a") as f:
-        json.dump(
-            {
-                "trial_number": trial.number,
-                "hparams": hparams,
-                "fold_metrics": fold_metrics,
-                "deciding_metric": deciding_metric,
-            },
-            f,
-        )
-        f.write("\n")
+    study_trials[trial.number] = {
+        "hparams": hparams,
+        "fold_metrics": fold_metrics,
+        "deciding_metric": deciding_metric,
+    }
 
     gc.collect()
     torch.cuda.empty_cache()
@@ -155,7 +150,11 @@ def objective(
 
 def process_results(results: dict, best_params: dict, study_output_path: Path) -> None:
     with (study_output_path).open("a") as f:
-        json.dump({"best_params": best_params, "results": results}, f, indent=4)
+        json.dump(
+            {"best_params": best_params, "results": results, "trials": study_trials},
+            f,
+            indent=4,
+        )
 
     plot_train_val_loss_curves(results)
     plot_metric_curves(results)
@@ -184,6 +183,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num_epochs", type=int, default=8, help="Number of epochs for training"
     )
+    parser.add_argument(
+        "--use_crf",
+        type=bool,
+        default=True,
+        help="Whether to use a CRF layer on top of the transformer model.",
+    )
     args = parser.parse_args()
     return args
 
@@ -201,7 +206,7 @@ def main():
         pruner=optuna.pruners.MedianPruner(),
         study_name=study_name,
     )
-    study_output_path = script_dir / f"{study_name}.json"
+    study_output_path = script_dir / "studies" / f"{study_name}.json"
     with study_output_path.open("w") as f:
         pass  # Create empty file
 
@@ -213,7 +218,7 @@ def main():
             trial,
             df,
             args.model_name,
-            fixed_hparams={"num_epochs": args.num_epochs},
+            fixed_hparams={"num_epochs": args.num_epochs, "use_crf": args.use_crf},
             study_output_path=study_output_path,
         ),
         n_trials=args.num_trials,
@@ -227,7 +232,10 @@ def main():
     # Train final model with best hyperparameters on the full dataset
     model_output_dir = get_model_output_dir("final_model")
     model_output_dir.mkdir(exist_ok=True, parents=True)
-    final_hparams = best_params | {"num_epochs": args.num_epochs}
+    final_hparams = best_params | {
+        "num_epochs": args.num_epochs,
+        "use_crf": args.use_crf,
+    }
     results = train_lodo(df, args.model_name, final_hparams, True, model_output_dir)
     process_results(results, best_params)
 
