@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.optim import AdamW
 from tqdm import tqdm
 from transformers import (
-    AutoModelForTokenClassification,
+    AutoModel,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
 )
@@ -24,6 +24,7 @@ from transformers.utils import logging
 from torchcrf import CRF
 
 from plot import plot_train_loss_curve
+from utils import MODEL_DEFAULT, get_validation_debate, label2id, id2label, label_list
 
 logging.set_verbosity_error()
 logging.disable_progress_bar()
@@ -31,7 +32,6 @@ logging.disable_progress_bar()
 MAX_LENGTH = 512
 EARLY_STOPPING_DELTA = 0.02
 PATIENCE = 3
-MODEL_DEFAULT = "xlm-roberta-base"
 
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
@@ -80,26 +80,21 @@ def get_device() -> torch.device:
     return device
 
 
-# Label mapping
-label_list = ["O", "B", "I"]
-label2id = {l: i for i, l in enumerate(label_list)}
-id2label = {i: l for l, i in label2id.items()}
-
-
 class WTCLModel(nn.Module):
     def __init__(self, model_name: str, hparams: dict = None):
         super(WTCLModel, self).__init__()
-        self.transformer = AutoModelForTokenClassification.from_pretrained(
+        self.transformer = AutoModel.from_pretrained(
             model_name,
-            num_labels=len(label_list),
-            id2label=id2label,
-            label2id=label2id,
             device_map=get_device(),
         )
         if hparams:
-            self.transformer.config.hidden_dropout_prob = hparams["dropout"]
-            self.transformer.config.attention_probs_dropout_prob = hparams["dropout"]
+            self.transformer.config.hidden_dropout_prob = 0.1
+            self.transformer.config.attention_probs_dropout_prob = 0.1
 
+        hidden_size = self.transformer.config.hidden_size
+
+        self.dropout = nn.Dropout(hparams["dropout"])
+        self.fc = nn.Linear(hidden_size, len(label_list), device=get_device())
         self.crf = CRF(len(label_list), batch_first=True)
 
     def forward(
@@ -108,9 +103,11 @@ class WTCLModel(nn.Module):
         attention_mask: torch.Tensor,
         labels: torch.Tensor = None,
     ) -> dict:
-        outputs = self.transformer(
-            input_ids=input_ids, attention_mask=attention_mask, labels=labels
+        transformer_output = self.transformer(
+            input_ids=input_ids, attention_mask=attention_mask
         )
+        dropout_output = self.dropout(transformer_output.last_hidden_state)
+        logits = self.fc(dropout_output)
         result = {}
 
         if labels is not None:
@@ -120,13 +117,11 @@ class WTCLModel(nn.Module):
 
             # Training loss is negative log-likelihood from CRF
             loss = -self.crf(
-                outputs.logits, labels, mask=attention_mask.bool(), reduction="mean"
+                logits, labels, mask=attention_mask.bool(), reduction="mean"
             )
             result["loss"] = loss
 
-        result["predictions"] = self.crf.decode(
-            outputs.logits, mask=attention_mask.bool()
-        )
+        result["predictions"] = self.crf.decode(logits, mask=attention_mask.bool())
 
         return result
 
@@ -141,13 +136,6 @@ def get_tokenizer(model_name: str) -> AutoTokenizer:
 
 
 def encode(text: torch.Tensor, labels: torch.Tensor, tokenizer: AutoTokenizer) -> dict:
-    enc = tokenizer(
-        text,
-        truncation=True,
-        padding="max_length",
-        max_length=MAX_LENGTH,
-    )
-
     # Pad labels to match the length of input_ids
     if len(labels) < MAX_LENGTH:
         labels += ["O"] * (MAX_LENGTH - len(labels))
@@ -155,6 +143,12 @@ def encode(text: torch.Tensor, labels: torch.Tensor, tokenizer: AutoTokenizer) -
         raise ValueError(
             f"Warning: Labels length {len(labels)} exceeds MAX_LENGTH {MAX_LENGTH}."
         )
+    enc = tokenizer(
+        text,
+        truncation=True,
+        padding="max_length",
+        max_length=MAX_LENGTH,
+    )
 
     enc["labels"] = [label2id[label] for label in labels]
     return enc
@@ -273,12 +267,18 @@ def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> 
     model.eval()
     model.to(device)
 
+    if len(dataloader) == 0:
+        raise ValueError(
+            "No batches were processed. Check the dataloader and input data."
+        )
     all_preds = []
     all_labels = []
+    total_loss = 0
+    total_sequences = 0
 
     with torch.no_grad():
         for batch in dataloader:
-
+            batch_size = batch["input_ids"].size(0)
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
@@ -289,9 +289,10 @@ def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> 
 
             all_preds.extend(outputs["predictions"])
             all_labels.extend(labels.cpu().tolist())
+            total_loss += outputs["loss"].item() * batch_size
+            total_sequences += batch_size
 
-    # print(f"Evaluation - Preds shape: {np.array(all_preds).shape}, Labels shape: {np.array(all_labels).shape}, Logits shape: {np.array(all_logits).shape}")
-    return all_preds, all_labels, outputs["loss"].cpu()
+    return all_preds, all_labels, total_loss / total_sequences
 
 
 def train(
@@ -311,10 +312,12 @@ def train(
     epochs_no_improve = 0
     for epoch in tqdm(range(epochs), leave=False, desc="Training Epochs"):
         model.train()
-        total_loss = 0
+        total_training_loss = 0
+        total_sequences = 0
 
         for batch in tqdm(train_loader, leave=False, desc="Batches"):
             optimizer.zero_grad()
+            batch_size = batch["input_ids"].size(0)
 
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
@@ -330,9 +333,11 @@ def train(
             optimizer.step()
             scheduler.step()
 
-            total_loss += loss.item()
+            total_sequences += batch_size
+            total_training_loss += loss.item() * batch_size
 
-        model_results["training_loss"].append(total_loss / len(train_loader))
+        training_loss = total_training_loss / total_sequences
+        model_results["training_loss"].append(training_loss)
 
         if val_loader is not None:
             preds, labels, val_loss = evaluate(model, val_loader, get_device())
@@ -343,21 +348,22 @@ def train(
                 ignore_index=-100,
                 reduction="mean",
             ) """
-            model_results["validation_loss"].append(val_loss.item())
-            token_level_metrics = compute_metrics_token_level(preds, labels)
-            model_results["validation_metrics"].append(token_level_metrics)
+            model_results["validation_loss"].append(val_loss)
+            validation_metrics = compute_metrics_token_level(preds, labels)
+            model_results["validation_metrics"].append(validation_metrics)
             tqdm.write(
-                f"Epoch {epoch}: TL={(total_loss / len(train_loader)):.4f}, "
-                f"VL={val_loss.item():.4f}, "
-                f"M-F1={token_level_metrics['macro']['f1']:.4f}, "
-                f"m-F1={token_level_metrics['micro']['f1']:.4f}, "
-                f"A={token_level_metrics['macro']['accuracy']:.4f}, "
-                f"P={token_level_metrics['macro']['precision']:.4f}, "
-                f"R={token_level_metrics['macro']['recall']:.4f}"
+                f"Epoch {epoch}: "
+                f"TL={training_loss:.4f}, "
+                f"VL={val_loss:.4f}, "
+                f"M-F1={validation_metrics['macro']['f1']:.4f}, "
+                f"m-F1={validation_metrics['micro']['f1']:.4f}, "
+                f"A={validation_metrics['macro']['accuracy']:.4f}, "
+                f"P={validation_metrics['macro']['precision']:.4f}, "
+                f"R={validation_metrics['macro']['recall']:.4f}"
             )
 
             # Early stopping
-            if val_loss < best_val_loss - EARLY_STOPPING_DELTA:
+            if (val_loss < best_val_loss - EARLY_STOPPING_DELTA):
                 best_val_loss = val_loss
                 epochs_no_improve = 0
             else:
@@ -369,14 +375,12 @@ def train(
                 )
                 break
         else:
-            tqdm.write(
-                f"Epoch {epoch}: Training Loss={(total_loss / len(train_loader)):.4f}"
-            )
+            tqdm.write(f"Epoch {epoch}: TL={training_loss:.4f}")
     return model_results
 
 
 def train_lodo(
-    df: pd.DataFrame, model_name: str, hparams: dict, model_output_dir: Path
+    df: pd.DataFrame, model_name: str, hparams: dict, val: bool, model_output_dir: Path
 ) -> dict:
     """
     Leave-one-debate-out training function.
@@ -387,10 +391,17 @@ def train_lodo(
     all_debates = df["debate_id"].unique()
     results = {}
     tokenizer = get_tokenizer(model_name)
+    val_loader = None
 
     # Leave-one-debate-out
     for debate in tqdm(all_debates, desc="Leave-One-Debate-Out Folds", leave=True):
-        train_data = df[df["debate_id"] != debate]
+        remaining_debates = [d for d in all_debates if d != debate]
+        if val:
+            val_debate = get_validation_debate(df, remaining_debates)
+            val_data = df[df["debate_id"] == val_debate]
+            train_data = train_data = df[df["debate_id"] not in [debate, val_debate]]
+        else:
+            train_data = df[df["debate_id"] != debate]
         test_data = df[df["debate_id"] == debate]
 
         # Prepare datasets and dataloaders
@@ -405,6 +416,13 @@ def train_lodo(
         test_loader = DataLoader(
             test_dataset, batch_size=hparams["batch_size"], shuffle=False
         )
+        if val:
+            val_dataset = WTCLDataset(
+                val_data.to_dict("records"), tokenizer, MAX_LENGTH
+            )
+            val_loader = DataLoader(
+                val_dataset, batch_size=hparams["batch_size"], shuffle=False
+            )
 
         # Create new model instance for each CV fold
         model = build_model(model_name, {"dropout": hparams["dropout"]})
@@ -429,6 +447,7 @@ def train_lodo(
             scheduler,
             get_device(),
             hparams["num_epochs"],
+            val_loader,
         )
 
         # Save the model for this debate
@@ -437,10 +456,10 @@ def train_lodo(
 
         # Evaluate the model on the test debate
         preds, labels, _ = evaluate(model, test_loader, get_device())
-        token_level_metrics = compute_metrics_token_level(preds, labels)
-        model_results["metrics"] = token_level_metrics
+        test_metrics = compute_metrics_token_level(preds, labels)
+        model_results["test_metrics"] = test_metrics
         tqdm.write(
-            f"Debate '{debate}' - Macro F1: {token_level_metrics['macro']['f1']:.4f}"
+            f"Debate '{debate}' - Macro F1: {test_metrics['macro']['f1']:.4f}"
         )
         results[debate] = model_results
         del (
@@ -456,10 +475,10 @@ def train_lodo(
     results["overall"]["micro"] = {}
     for metric in ["f1", "precision", "recall"]:
         results["overall"]["macro"][metric] = np.mean(
-            [results[debate]["metrics"]["macro"][metric] for debate in all_debates]
+            [results[debate]["test_metrics"]["macro"][metric] for debate in all_debates]
         )
         results["overall"]["micro"][metric] = np.mean(
-            [results[debate]["metrics"]["micro"][metric] for debate in all_debates]
+            [results[debate]["test_metrics"]["micro"][metric] for debate in all_debates]
         )
     tqdm.write(
         f"Overall Macro F1 across all debates: {results['overall']['macro']['f1']:.4f}"
@@ -523,6 +542,17 @@ def parse_args() -> argparse.Namespace:
         default=0.1,
         help="Warmup ratio for learning rate scheduler.",
     )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default=MODEL_DEFAULT,
+        help="Name of the transformer model to use.",
+    )
+    parser.add_argument(
+        "--val",
+        action="store_true",
+        help="Whether to perform validation during training (enables early stopping).",
+    )
     return parser.parse_args()
 
 
@@ -539,7 +569,7 @@ def main():
     model_output_dir = get_model_output_dir(args.dataset_name)
     model_output_dir.mkdir(exist_ok=True, parents=True)
 
-    results = train_lodo(df, args.model_name, vars(args), model_output_dir)
+    results = train_lodo(df, args.model_name, vars(args), args.val, model_output_dir)
 
     process_results(results, model_output_dir)
 

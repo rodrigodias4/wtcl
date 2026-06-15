@@ -11,50 +11,19 @@ from transformers import get_linear_schedule_with_warmup
 
 from train import (
     MAX_LENGTH,
-    MODEL_DEFAULT,
     RANDOM_SEED,
     WTCLDataset,
     build_model,
-    compute_metrics_token_level,
-    evaluate,
     get_device,
     get_model_output_dir,
     get_tokenizer,
     set_random_seed,
     train,
     train_lodo,
-    label2id,
     script_dir,
 )
 from plot import plot_train_val_loss_curves, plot_metric_curves
-
-
-def get_validation_debate(df: pd.DataFrame, debates: list[str]) -> str:
-    """
-    Choosing validation debate that minimizes the distance to the mean
-    ratio of positive tokens across all debates.
-    This is a heuristic to select a validation debate that is representative of the overall dataset.
-    """
-    debate_ratios = {}
-    for debate in debates:
-        n_positive_tokens = 0
-        n_tokens = 0
-        debate_data = df[df["debate_id"] == debate]
-
-        for index, row in debate_data.iterrows():
-            labels = eval(row["labels"])
-            n_positive_tokens += sum(label2id[label] > 0 for label in labels)
-            n_tokens += len(labels)
-
-        debate_ratios[debate] = n_positive_tokens / n_tokens if n_tokens > 0 else 0
-
-    # Find the debate with the closest number of positive tokens to the mean
-    mean_positive_tokens = sum(debate_ratios.values()) / len(debate_ratios)
-    val_debate = min(
-        debate_ratios, key=lambda x: abs(debate_ratios[x] - mean_positive_tokens)
-    )
-
-    return val_debate
+from utils import get_validation_debate, MODEL_DEFAULT
 
 
 # -----------------------------------------
@@ -66,7 +35,7 @@ def get_validation_debate(df: pd.DataFrame, debates: list[str]) -> str:
 def sample_hparams(trial: optuna.Trial) -> dict:
     return {
         "lr": trial.suggest_float("lr", 1e-5, 5e-5, log=True),
-        "batch_size": trial.suggest_categorical("batch_size", [4, 8, 16]),
+        "batch_size": trial.suggest_categorical("batch_size", [8, 16, 32]),
         "weight_decay": trial.suggest_float("weight_decay", 0.0, 0.1),
         "warmup_ratio": trial.suggest_float("warmup_ratio", 0.0, 0.2),
         "dropout": trial.suggest_float("dropout", 0.1, 0.3),
@@ -82,10 +51,10 @@ def objective(
     step = 0
     debates = df["debate_id"].unique()
     tokenizer = get_tokenizer(model_name)
-
+    tqdm.write(f"Trial {trial.number} with hyperparameters: {hparams}")
     for test_debate in tqdm(debates, desc="Leave-One-Debate-Out Folds"):
         tqdm.write(
-            f"Tuning models with {test_debate} left out as test debate and hyperparameters: {hparams}"
+            f"Tuning models with {test_debate} left out as test debate"
         )
 
         train_val_debates = list([d for d in debates if d != test_debate])
@@ -95,13 +64,13 @@ def objective(
         # Prepare datasets and dataloaders
         train_data = df[df["debate_id"].isin(train_debates)]
         val_data = df[df["debate_id"] == val_debate]
-        tqdm.write(f"Validating on debate: {val_debate} | Train size: {len(train_data)} | Val size: {len(val_data)}")
+        tqdm.write(
+            f"Validating on debate: {val_debate} | Train size: {len(train_data)} | Val size: {len(val_data)}"
+        )
         train_dataset = WTCLDataset(
             train_data.to_dict("records"), tokenizer, MAX_LENGTH
         )
-        val_dataset = WTCLDataset(
-            val_data.to_dict("records"), tokenizer, MAX_LENGTH
-        )
+        val_dataset = WTCLDataset(val_data.to_dict("records"), tokenizer, MAX_LENGTH)
         train_loader = DataLoader(
             train_dataset, batch_size=hparams["batch_size"], shuffle=True
         )
@@ -138,19 +107,15 @@ def objective(
             fixed_hparams["num_epochs"],
             val_loader,
         )
-
-        preds, labels, _ = evaluate(model, val_loader, get_device())
-
-        metrics = compute_metrics_token_level(preds, labels)
-        fold_metrics.append(metrics)
-        trial.report(metrics["macro"]["f1"], step)
+        fold_metrics.append(results)
+        trial.report(results["validation_metrics"][-1]["macro"]["f1"], step)
 
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
 
         step += 1
 
-    return sum([metrics["macro"]["f1"] for metrics in fold_metrics]) / len(fold_metrics)
+    return sum([metrics["validation_metrics"][-1]["macro"]["f1"] for metrics in fold_metrics]) / len(fold_metrics)
 
 
 # ------------------------------------------
@@ -189,7 +154,7 @@ def parse_args() -> argparse.Namespace:
         help="Number of trials for hyperparameter tuning",
     )
     parser.add_argument(
-        "--num_epochs", type=int, default=5, help="Number of epochs for training"
+        "--num_epochs", type=int, default=8, help="Number of epochs for training"
     )
     args = parser.parse_args()
     return args
@@ -216,13 +181,15 @@ def main():
         n_trials=args.num_trials,
         show_progress_bar=True,
     )
-    best_params = study.best_trial.params
+    best_params = study.best_trial.params.copy()
     print("Best hyperparameters:", best_params)
+    
+    del study  # Free up memory
 
     # Train final model with best hyperparameters on the full dataset
     model_output_dir = get_model_output_dir("final_model")
     model_output_dir.mkdir(exist_ok=True, parents=True)
-    results, models = train_lodo(df, args.model_name, best_params, model_output_dir)
+    results = train_lodo(df, args.model_name, best_params, True, model_output_dir)
     process_results(results, best_params)
 
 

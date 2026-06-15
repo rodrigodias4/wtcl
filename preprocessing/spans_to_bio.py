@@ -4,27 +4,51 @@ import pandas as pd
 from tqdm import tqdm
 from transformers import AutoTokenizer
 import json
+import argparse
 
-MODEL = "xlm-roberta-base"
-
-
-def parse_args():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Convert spans to BIO format")
-    parser.add_argument("input_file", type=str, help="Path to input CSV file")
-    parser.add_argument(
-        "-m", "--model", type=str, default=MODEL, help="Tokenizer model name"
-    )
-    parser.add_argument(
-        "--keep_token",
-        action="store_true",
-        help="Whether to zip the tokens with the BIO labels in the output",
-    )
-    return parser.parse_args()
+MODEL = "distilroberta-base"
 
 
-def chunk_bio(id, text, spans, tokenizer, stride, max_length=512, keep_token=False):
+def truncate(id: int, text: str, spans: list, tokenizer: AutoTokenizer, max_length):
+    encoding = tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
+    input_ids = encoding["input_ids"]
+    offsets = encoding["offset_mapping"]
+
+    tokens = tokenizer.convert_ids_to_tokens(input_ids)
+
+    # Build token-level BIO labels
+    labels = ["O"] * len(tokens)
+
+    for span in spans:
+        span_start = span["start"]
+        span_end = span["end"]
+
+        """ if span_end > max_length:
+            raise ValueError(f"Span end {span_end} exceeds max_length {max_length} for row {id}. Consider using the chunking strategy instead.") """
+
+        matching_tokens = []
+
+        for i, (tok_start, tok_end) in enumerate(offsets):
+            if tok_start < span_end and tok_end > span_start:
+                matching_tokens.append(i)
+
+        if matching_tokens:
+            labels[matching_tokens[0]] = "B"
+            for idx in matching_tokens[1:]:
+                labels[idx] = "I"
+
+    return {"input_ids": input_ids[:max_length], "labels": labels[:max_length]}
+
+
+def chunk_bio(
+    id: int,
+    text: str,
+    spans: list,
+    tokenizer: AutoTokenizer,
+    stride: int,
+    max_length: int = 512,
+    keep_token: bool = False,
+):
     """
     Converts a single example into span-safe chunks.
     """
@@ -57,15 +81,12 @@ def chunk_bio(id, text, spans, tokenizer, stride, max_length=512, keep_token=Fal
                 labels[idx] = "I"
 
     if len(input_ids) <= max_length:
-        return [{
-            "input_ids": input_ids,
-            "labels": labels
-        }]
+        return [{"input_ids": input_ids, "labels": labels}]
 
     # -----------------------------
     # Identify safe chunk boundaries
     # -----------------------------
-    def is_inside_span(idx, span_ranges):
+    def is_inside_span(idx: int, span_ranges: list) -> bool:
         return any(s <= idx < e for s, e in span_ranges)
 
     span_ranges = []
@@ -78,7 +99,7 @@ def chunk_bio(id, text, spans, tokenizer, stride, max_length=512, keep_token=Fal
         if token_range:
             span_ranges.append((token_range[0], token_range[-1] + 1))
 
-    def build_sentence_boundaries(tokens):
+    def build_sentence_boundaries(tokens: list) -> list:
         sentence_end_punct = {".", "!", "?"}
 
         boundaries = []
@@ -89,10 +110,12 @@ def chunk_bio(id, text, spans, tokenizer, stride, max_length=512, keep_token=Fal
                 boundaries.append(i + 1)  # boundary AFTER punctuation
 
         return boundaries
-    
+
     sentence_boundaries = build_sentence_boundaries(tokens)
-    
-    def snap_to_sentence(boundary, sentence_boundaries, min_boundary=0):
+
+    def snap_to_sentence(
+        boundary: int, sentence_boundaries: list, min_boundary: int = 0
+    ) -> int:
         """
         Moves boundary left to nearest valid sentence boundary.
         """
@@ -110,13 +133,15 @@ def chunk_bio(id, text, spans, tokenizer, stride, max_length=512, keep_token=Fal
     chunks = []
     start = 0
     n = len(input_ids)
-    
-    def make_span_safe(boundary, span_ranges, min_boundary=0):
+
+    def make_span_safe(boundary: int, span_ranges: list, min_boundary: int = 0) -> int:
         """
         Moves boundary left until it is not inside any span.
         """
         initial_boundary = boundary
-        while boundary > min_boundary and any(s <= boundary < e for s, e in span_ranges):
+        while boundary > min_boundary and any(
+            s <= boundary < e for s, e in span_ranges
+        ):
             boundary -= 1
         return boundary
 
@@ -131,13 +156,14 @@ def chunk_bio(id, text, spans, tokenizer, stride, max_length=512, keep_token=Fal
         if end <= start:
             end = min(start + max_length, n)
 
-        chunks.append({
-            "input_ids": input_ids[start:end],
-            "labels": labels[start:end]
-        })
+        chunks.append({"input_ids": input_ids[start:end], "labels": labels[start:end]})
 
-        next_start = snap_to_sentence(start + stride, sentence_boundaries, min_boundary=start + stride / 2)
-        next_start = make_span_safe(next_start, span_ranges, min_boundary=start + stride / 2)  # don't move back more than half the stride to avoid infinite loops
+        next_start = snap_to_sentence(
+            start + stride, sentence_boundaries, min_boundary=start + stride / 2
+        )
+        next_start = make_span_safe(
+            next_start, span_ranges, min_boundary=start + stride / 2
+        )  # don't move back more than half the stride to avoid infinite loops
 
         # enforce forward progress
         if next_start <= start:
@@ -145,10 +171,35 @@ def chunk_bio(id, text, spans, tokenizer, stride, max_length=512, keep_token=Fal
 
         start = next_start
 
-    assert(len(chunks) > 0), "No chunks were created. Check the input text and spans."
-    assert(all(len(c["input_ids"]) == len(c["labels"]) for c in chunks)), "Mismatch between input_ids and labels lengths in chunks."
-    tqdm.write(f"Row {id}: Tokenized into {len(tokens)} tokens, {len(spans)} spans, resulting in {len(chunks)} chunks.")
+    assert len(chunks) > 0, "No chunks were created. Check the input text and spans."
+    assert all(
+        len(c["input_ids"]) == len(c["labels"]) for c in chunks
+    ), "Mismatch between input_ids and labels lengths in chunks."
+    tqdm.write(
+        f"Row {id}: Tokenized into {len(tokens)} tokens, {len(spans)} spans, resulting in {len(chunks)} chunks with lengths {', '.join(str(len(c['input_ids'])) for c in chunks)}."
+    )
     return chunks
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Convert spans to BIO format")
+    parser.add_argument("input_file", type=str, help="Path to input CSV file")
+    parser.add_argument(
+        "-m", "--model", type=str, default=MODEL, help="Tokenizer model name"
+    )
+    parser.add_argument(
+        "-s",
+        "--strategy",
+        choices=["truncate", "chunk"],
+        default="chunk",
+        help="Strategy for handling long texts",
+    )
+    parser.add_argument(
+        "--keep_token",
+        action="store_true",
+        help="Whether to zip the tokens with the BIO labels in the output",
+    )
+    return parser.parse_args()
 
 
 def main():
@@ -164,41 +215,69 @@ def main():
         data = pd.read_csv(f)
 
     all_rows = []
-    for index, row in tqdm(
-        data.iterrows(), total=len(data), desc="Converting spans to BIO"
-    ):
-        text = row["text"]
-        chunks = chunk_bio(
-            row["id"],
-            text=text,
-            spans=json.loads(row["spans"]),
-            tokenizer=tokenizer,
-            stride=384,
-            max_length=512,
-            keep_token=args.keep_token,
-        )
-        new_rows = []
+    overlapping_chunks = 0
 
-        for chunk_id, chunk in enumerate(chunks):
-            new_rows.append(
+    if args.strategy == "chunk":
+        for index, row in tqdm(
+            data.iterrows(), total=len(data), desc="Converting spans to BIO"
+        ):
+            text = row["text"]
+            chunks = chunk_bio(
+                row["id"],
+                text=text,
+                spans=json.loads(row["spans"]),
+                tokenizer=tokenizer,
+                stride=512,
+                max_length=512,
+                keep_token=args.keep_token,
+            )
+            if len(chunks) > 1:
+                overlapping_chunks += len(chunks)
+            new_rows = []
+
+            for chunk_id, chunk in enumerate(chunks):
+                new_rows.append(
+                    {
+                        "debate_id": row["debate_id"] if "debate_id" in row else index,
+                        "id": row["id"],
+                        "chunk_id": chunk_id,
+                        "text": tokenizer.decode(
+                            chunk["input_ids"], skip_special_tokens=True
+                        ),
+                        "labels": json.dumps(chunk["labels"], ensure_ascii=False),
+                    }
+                )
+
+            all_rows.extend(new_rows)
+        print(f"Number of overlapping chunks: {overlapping_chunks}")
+    elif args.strategy == "truncate":
+        for index, row in tqdm(
+            data.iterrows(), total=len(data), desc="Converting spans to BIO"
+        ):
+            row_truncated = truncate(
+                id=row["id"],
+                text=row["text"],
+                spans=json.loads(row["spans"]),
+                tokenizer=tokenizer,
+                max_length=512,
+            )
+
+            all_rows.append(
                 {
-                    "debate_id": row["debate_id"] if "debate_id" in row else index,
+                    "debate_id": row["debate_id"],
                     "id": row["id"],
-                    "chunk_id": chunk_id,
                     "text": tokenizer.decode(
-                        chunk["input_ids"], skip_special_tokens=True
+                        row_truncated["input_ids"], skip_special_tokens=True
                     ),
-                    "labels": json.dumps(chunk["labels"], ensure_ascii=False),
+                    "labels": json.dumps(row_truncated["labels"], ensure_ascii=False),
                 }
             )
 
-        all_rows.extend(new_rows)
-
     print(f"Processed {len(data)} rows into {len(all_rows)} chunks.")
 
-    pd.DataFrame(all_rows).sort_values(["id", "chunk_id"]).to_csv(
-        output_file, index=False
-    )
+    pd.DataFrame(all_rows).sort_values(
+        ["id", "chunk_id"] if "chunk_id" in all_rows[0] else ["id"]
+    ).to_csv(output_file, index=False)
 
 
 if __name__ == "__main__":
