@@ -7,6 +7,7 @@ import torch
 MODEL_DEFAULT = "distilroberta-base"
 
 CRF_LEARNING_RATE_MULTIPLIER = 10
+TEMPERED_SAMPLING_ALPHA = 0.3
 
 # Label mapping
 label_list = ["O", "B", "I"]
@@ -14,7 +15,7 @@ label2id = {l: i for i, l in enumerate(label_list)}
 id2label = {i: l for l, i in label2id.items()}
 
 def handle_interrupt(signum, frame):
-    print("\nKeyboardInterrupt detected. Running garbage collection...")
+    #print("\nKeyboardInterrupt detected. Running garbage collection...")
     
     # Force garbage collection
     gc.collect()

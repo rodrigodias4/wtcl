@@ -1,5 +1,6 @@
 import argparse
 import ast
+from collections import defaultdict
 from datetime import datetime
 import gc
 import json
@@ -14,7 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 from torch.optim import AdamW
 from tqdm import tqdm
 from transformers import (
@@ -31,6 +32,7 @@ from plot import plot_metric_curves, plot_train_loss_curve, plot_train_val_loss_
 from plot_cm import plot_confusion_matrix
 from utils import (
     MODEL_DEFAULT,
+    TEMPERED_SAMPLING_ALPHA,
     decay_group,
     get_optimizer,
     get_validation_debate,
@@ -96,6 +98,31 @@ def get_device() -> torch.device:
             "No suitable device found. Please use a machine with CUDA or MPS support."
         )
     return device
+
+
+class TemperedDebateBatchSampler(Sampler):
+    def __init__(self, debate_to_indices, debates, weights, batch_size, num_batches):
+        self.debate_to_indices = debate_to_indices
+        self.debates = debates
+        self.weights = weights
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        self.debate_schedule = np.random.choice(
+            self.debates,
+            size=self.num_batches,
+            p=self.weights
+        )
+
+    def __iter__(self):
+        for i in range(self.num_batches):
+            d = self.debate_schedule[i]
+            indices = self.debate_to_indices[d]
+
+            batch = random.sample(indices, self.batch_size)
+            yield batch
+
+    def __len__(self):
+        return self.num_batches
 
 
 class WTCLModel(nn.Module):
@@ -437,7 +464,11 @@ def train(
 
 
 def train_lodo(
-    df: pd.DataFrame, model_name: str, hparams: dict, val: bool, model_output_dir: Path
+    df: pd.DataFrame,
+    model_name: str,
+    hparams: dict,
+    val: bool,
+    model_output_dir: Path,
 ) -> tuple[dict, dict]:
     """
     Leave-one-debate-out training function.
@@ -456,6 +487,9 @@ def train_lodo(
 
     all_preds = []
     all_labels = []
+    
+    with (model_output_dir / "hyperparameters.json").open("w") as f:
+        json.dump(hparams, f, indent=4, ensure_ascii=False)
 
     # Leave-one-debate-out
     for test_debate in tqdm(all_debates, desc="Leave-One-Debate-Out Folds", leave=True):
@@ -481,6 +515,19 @@ def train_lodo(
             tqdm.write(
                 f"░░ Split sizes: {len(train_data)} - {test_size} // {len(train_data)/len(df):.1%} - {test_size/len(df):.1%}"
             )
+
+        debate_to_indices = defaultdict(list)
+        for idx, row in enumerate(train_data.to_dict("records")):
+            debate_to_indices[row["debate_id"]].append(idx)
+
+        counts = np.array([len(debate_to_indices[d]) for d in remaining_debates])
+        weights = counts**hparams["tempered_sampling_alpha"]
+        weights = weights / weights.sum()
+
+        batch_sampler = TemperedDebateBatchSampler(
+            debate_to_indices, remaining_debates, weights, hparams["batch_size"], len(train_data) // hparams["batch_size"]
+        )
+
         test_data = df[df["debate_id"] == test_debate]
 
         # Prepare datasets and dataloaders
@@ -489,9 +536,7 @@ def train_lodo(
         )
         test_dataset = WTCLDataset(test_data.to_dict("records"), tokenizer, MAX_LENGTH)
 
-        train_loader = DataLoader(
-            train_dataset, batch_size=hparams["batch_size"], shuffle=True
-        )
+        train_loader = DataLoader(train_dataset, batch_sampler=batch_sampler)
         test_loader = DataLoader(
             test_dataset, batch_size=hparams["batch_size"], shuffle=False
         )
@@ -633,6 +678,12 @@ def parse_args() -> argparse.Namespace:
         help="Name of the dataset (for saving models)",
     )
     parser.add_argument(
+        "--model_name",
+        type=str,
+        default=MODEL_DEFAULT,
+        help="Name of the transformer model to use.",
+    )
+    parser.add_argument(
         "--dropout", type=float, default=0.1, help="Dropout rate for the model."
     )
     parser.add_argument(
@@ -660,20 +711,20 @@ def parse_args() -> argparse.Namespace:
         help="Weight decay for the optimizer.",
     )
     parser.add_argument(
-        "--model_name",
-        type=str,
-        default=MODEL_DEFAULT,
-        help="Name of the transformer model to use.",
-    )
-    parser.add_argument(
-        "--val",
-        action="store_true",
-        help="Whether to perform validation during training (enables early stopping).",
+        "--tempered_sampling_alpha",
+        type=float,
+        default=TEMPERED_SAMPLING_ALPHA,
+        help="Tempered sampling alpha for debate sampling.",
     )
     parser.add_argument(
         "--no_crf",
         action="store_false",
         help="Whether to disable the CRF layer on top of the transformer model.",
+    )
+    parser.add_argument(
+        "--val",
+        action="store_true",
+        help="Whether to perform validation during training (enables early stopping).",
     )
     return parser.parse_args()
 
@@ -698,11 +749,12 @@ def main():
         "warmup_ratio": args.warmup_ratio,
         "weight_decay": args.weight_decay,
         "use_crf": args.no_crf,
+        "tempered_sampling_alpha": args.tempered_sampling_alpha,
     }
+    
     results, all_preds_labels = train_lodo(
         df, args.model_name, hparams, args.val, model_output_dir
     )
-    results["hyperparameters"] = hparams
 
     process_results(results, all_preds_labels, model_output_dir)
 
