@@ -185,7 +185,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert spans to BIO format")
     parser.add_argument("input_file", type=str, help="Path to input CSV file")
     parser.add_argument(
-        "-m", "--model", type=str, default=MODEL, help="Tokenizer model name"
+        "-m", "--model_name", type=str, default=MODEL, help="Tokenizer model name"
     )
     parser.add_argument(
         "-s",
@@ -204,12 +204,12 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    output_file = f"{args.input_file.split('.')[0]}_bio_{args.model}.csv"
+    output_file = f"{args.input_file.split('.')[0]}_bio_{args.model_name.split('/')[-1]}.csv"
     print(f"Processing file: {args.input_file}")
-    print(f"Using model: {args.model}")
+    print(f"Using model: {args.model_name}")
     print(f"Output will be saved to: {output_file}")
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model, model_max_length=512)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, model_max_length=512)
 
     with open(args.input_file, "r") as f:
         data = pd.read_csv(f)

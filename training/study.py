@@ -3,6 +3,7 @@ import datetime
 import gc
 import json
 from pathlib import Path
+import signal
 
 import pandas as pd
 import torch
@@ -25,14 +26,18 @@ from train import (
     script_dir,
 )
 from plot import plot_train_val_loss_curves, plot_metric_curves
+from training.plot_cm import plot_confusion_matrix
 from utils import (
     get_optimizer,
     get_validation_debate,
     MODEL_DEFAULT,
+    handle_interrupt,
 )
 
 datetime_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 study_trials = {}
+
+signal.signal(signal.SIGINT, handle_interrupt)
 
 # -----------------------------------------
 # Hyperparameter tuning with Optuna
@@ -148,7 +153,7 @@ def objective(
 # ------------------------------------------
 
 
-def process_results(results: dict, best_params: dict, study_output_path: Path) -> None:
+def process_results(results: dict, all_preds_labels: dict, best_params: dict, study_output_path: Path) -> None:
     with (study_output_path).open("a") as f:
         json.dump(
             {"best_params": best_params, "results": results, "trials": study_trials},
@@ -156,8 +161,9 @@ def process_results(results: dict, best_params: dict, study_output_path: Path) -
             indent=4,
         )
 
-    plot_train_val_loss_curves(results)
-    plot_metric_curves(results)
+    plot_train_val_loss_curves(results, study_output_path.parent)
+    plot_metric_curves(results, study_output_path.parent)
+    plot_confusion_matrix(all_preds_labels, study_output_path.parent)
 
 
 # ------------------------------------------
@@ -230,14 +236,14 @@ def main():
     del study  # Free up memory
 
     # Train final model with best hyperparameters on the full dataset
-    model_output_dir = get_model_output_dir("final_model")
+    model_output_dir = get_model_output_dir(args.input_file.split("/")[-1].split("_")[0].split(".")[0], args.model_name)
     model_output_dir.mkdir(exist_ok=True, parents=True)
     final_hparams = best_params | {
         "num_epochs": args.num_epochs,
         "use_crf": args.use_crf,
     }
-    results = train_lodo(df, args.model_name, final_hparams, True, model_output_dir)
-    process_results(results, best_params)
+    results, all_preds_labels = train_lodo(df, args.model_name, final_hparams, True, model_output_dir)
+    process_results(results, all_preds_labels, best_params)
 
 
 if __name__ == "__main__":

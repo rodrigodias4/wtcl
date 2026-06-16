@@ -144,7 +144,11 @@ def min_words(
     min_words: int = 4,
 ) -> tuple[pd.DataFrame, int]:
     """Filter turns by minimum word count."""
-    df_min_words = df[df[text_col].apply(lambda x: _word_count(x) >= min_words)]
+    df_min_words = df.copy()
+    for i, row in df.iterrows():
+        if _word_count(row[text_col]) < min_words and row["spans"] == "[]":
+            #print(f"Removing row {row["id"]} from {row[debate_col]} with text: {row[text_col]!r} (word count: {_word_count(row[text_col])}) (spans: {row['spans']})")
+            df_min_words = df_min_words.drop(i)
     return df_min_words, len(df) - len(df_min_words)
 
 

@@ -4,11 +4,9 @@ import os
 from pathlib import Path
 
 from matplotlib import pyplot as plt, lines as mlines
-from sklearn.metrics import confusion_matrix
-import seaborn as sns
 
 PLOT_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]  # extend if needed
-from utils import label_list, label2id, id2label
+
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -23,7 +21,10 @@ def plot_metric_curves(results, output_dir: Path):
 
         plt.plot(
             epochs,
-            [metrics["validation_metrics"][i]["macro"]["f1"] for i in range(len(metrics["validation_metrics"]))],
+            [
+                metrics["validation_metrics"][i]["macro"]["f1"]
+                for i in range(len(metrics["validation_metrics"]))
+            ],
             color=plt.get_cmap("plasma")(i / len(results)),
             marker=marker,
             mec="white",
@@ -63,7 +64,18 @@ def plot_metric_curves(results, output_dir: Path):
         ) """
 
     plt.xlabel("Epoch")
-    plt.xticks(epochs)
+    plt.xticks(
+        [
+            i
+            for i in range(
+                1,
+                max(
+                    [len(metrics["validation_metrics"]) for metrics in results.values()]
+                )
+                + 1,
+            )
+        ]
+    )
     plt.ylabel("Macro F1")
     plt.ylim(0, 1)
     plt.grid(alpha=0.3)
@@ -110,7 +122,18 @@ def plot_train_val_loss_curves(results, output_dir: Path):
 
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.xticks(epochs)
+    plt.xticks(
+        [
+            i
+            for i in range(
+                1,
+                max(
+                    [len(metrics["validation_metrics"]) for metrics in results.values()]
+                )
+                + 1,
+            )
+        ]
+    )
     plt.grid(alpha=0.3)
     plt.title("Training and Validation Loss Curves")
     plt.grid(True)
@@ -145,7 +168,11 @@ def plot_train_loss_curve(results, output_dir: Path):
         )
 
     plt.legend(
-        [model_name for model_name in results.keys() if model_name not in ["overall", "hyperparameters"]],
+        [
+            model_name
+            for model_name in results.keys()
+            if model_name not in ["overall", "hyperparameters"]
+        ],
         loc="upper right",
     )
     plt.xticks(epochs)
@@ -156,41 +183,6 @@ def plot_train_loss_curve(results, output_dir: Path):
 
     plt.tight_layout()
     plt.savefig(output_dir / "training_loss_curve.png", dpi=300)
-    plt.close()
-
-
-def plot_confusion_matrix(all_preds_labels: dict, output_dir: Path, normalize: bool = True):
-    y_true = all_preds_labels["labels"]
-    mask = y_true != -100
-    y_true = y_true[mask]
-    y_pred = all_preds_labels["preds"]
-    y_pred = y_pred[mask]
-    y_true = [id2label[i] for i in y_true]
-    y_pred = [id2label[i] for i in y_pred]
-
-    cm = confusion_matrix(
-        y_true,
-        y_pred,
-        labels=label_list,
-        normalize="true" if normalize else None
-    )
-    
-    plt.figure(figsize=(6, 5))
-
-    sns.heatmap(
-        cm,
-        annot=True,
-        fmt=".2f" if normalize else "d",
-        cmap="plasma",
-        xticklabels=label_list,
-        yticklabels=label_list
-    )
-
-    plt.xlabel("Predicted label")
-    plt.ylabel("True label")
-    plt.title("BIO Confusion Matrix")
-    plt.tight_layout()
-    plt.savefig(output_dir / "confusion_matrix.png", dpi=300)
     plt.close()
 
 

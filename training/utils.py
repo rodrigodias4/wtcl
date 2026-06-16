@@ -1,3 +1,6 @@
+import gc
+import sys
+
 import pandas as pd
 import torch
 
@@ -9,6 +12,15 @@ CRF_LEARNING_RATE_MULTIPLIER = 10
 label_list = ["O", "B", "I"]
 label2id = {l: i for i, l in enumerate(label_list)}
 id2label = {i: l for l, i in label2id.items()}
+
+def handle_interrupt(signum, frame):
+    print("\nKeyboardInterrupt detected. Running garbage collection...")
+    
+    # Force garbage collection
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    sys.exit(0)
 
 
 def get_validation_debate(df: pd.DataFrame, debates: list[str]) -> str:
@@ -71,12 +83,12 @@ def get_optimizer(model, hparams):
         # FC layer
         {
             "params": decay_group(model.fc),
-            "lr": hparams["lr"],
+            "lr": 1e-3,
             "weight_decay": hparams["weight_decay"],
         },
         {
             "params": no_decay_group(model.fc),
-            "lr": hparams["lr"],
+            "lr": 1e-3,
             "weight_decay": 0.0,
         },
     ]
@@ -85,12 +97,12 @@ def get_optimizer(model, hparams):
             [
                 {
                     "params": decay_group(model.crf),
-                    "lr": hparams["lr"] * CRF_LEARNING_RATE_MULTIPLIER,
+                    "lr": 1e-3,
                     "weight_decay": 0.0,  # IMPORTANT: no decay on CRF
                 },
                 {
                     "params": no_decay_group(model.crf),
-                    "lr": hparams["lr"] * CRF_LEARNING_RATE_MULTIPLIER,
+                    "lr": 1e-3,
                     "weight_decay": 0.0,
                 },
             ]

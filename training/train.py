@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import random
+import signal
 
 import numpy as np
 import pandas as pd
@@ -23,13 +24,17 @@ from transformers import (
 )
 from transformers.utils import logging
 from torchcrf import CRF
+from seqeval.metrics import classification_report
+from seqeval.scheme import IOB1
 
 from plot import plot_metric_curves, plot_train_loss_curve, plot_train_val_loss_curves
+from plot_cm import plot_confusion_matrix
 from utils import (
     MODEL_DEFAULT,
     decay_group,
     get_optimizer,
     get_validation_debate,
+    handle_interrupt,
     label2id,
     id2label,
     label_list,
@@ -47,6 +52,8 @@ script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 # Set random seeds for reproducibility
 RANDOM_SEED = 42
+
+signal.signal(signal.SIGINT, handle_interrupt)
 
 
 def set_random_seed(seed: int) -> None:
@@ -68,11 +75,12 @@ def set_random_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def get_model_output_dir(dataset_name: str) -> Path:
+def get_model_output_dir(dataset_name: str, model_name: str) -> Path:
     return (
         Path(os.path.dirname(os.path.abspath(__file__)))
         / "models"
         / dataset_name
+        / model_name.split("/")[-1]
         / datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     )
 
@@ -96,10 +104,15 @@ class WTCLModel(nn.Module):
         self.transformer = AutoModel.from_pretrained(
             model_name,
             device_map=get_device(),
+            dtype=torch.float32,
         )
         if hparams:
-            self.transformer.config.hidden_dropout_prob = 0.1
-            self.transformer.config.attention_probs_dropout_prob = 0.1
+            self.transformer.config.hidden_dropout_prob = 0.2
+            self.transformer.config.attention_probs_dropout_prob = 0.2
+
+        for name, param in self.transformer.named_parameters():
+            if "encoder.layer.1" in name:
+                param.requires_grad = False
 
         hidden_size = self.transformer.config.hidden_size
 
@@ -173,7 +186,9 @@ def encode(
         max_length=max_length,
     )
 
-    enc["labels"] = [label2id[label] for label in labels if label in label2id] + [-100] * (max_length - len(labels))
+    enc["labels"] = [label2id[label] for label in labels if label in label2id] + [
+        -100
+    ] * (max_length - len(labels))
     if len(enc["labels"]) != max_length:
         raise ValueError(
             f"Warning: Labels length {len(enc['labels'])} does not match max_length {max_length}."
@@ -204,7 +219,9 @@ class WTCLDataset(Dataset):
         input_ids = torch.tensor(enc["input_ids"], dtype=torch.long)
         attention_mask = torch.tensor(enc["attention_mask"], dtype=torch.long)
         labels = torch.tensor(enc["labels"], dtype=torch.long)
-        assert input_ids.shape[-1] == labels.shape[-1], "Input and label lengths must match max_length"
+        assert (
+            input_ids.shape[-1] == labels.shape[-1]
+        ), "Input and label lengths must match max_length"
 
         # Set labels to -100 for padding tokens
         labels[attention_mask == 0] = -100
@@ -243,7 +260,7 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
         valid_l = [x for x in label if x != -100]
 
         # align lengths safely
-        pred = pred[:len(valid_l)]
+        pred = pred[: len(valid_l)]
 
         flat_preds.extend(pred)
         flat_labels.extend(valid_l)
@@ -413,7 +430,7 @@ def train(
                 )
                 break
         else:
-            tqdm.write(f"Epoch {epoch}: TL={training_loss:.4f}")
+            tqdm.write(f"░░ Epoch {epoch}: TL={training_loss:.4f}")
         gc.collect()
         torch.cuda.empty_cache()
     return model_results
@@ -421,13 +438,12 @@ def train(
 
 def train_lodo(
     df: pd.DataFrame, model_name: str, hparams: dict, val: bool, model_output_dir: Path
-) -> dict:
+) -> tuple[dict, dict]:
     """
     Leave-one-debate-out training function.
     For each debate, we train a model on all other debates and evaluate on the left-out debate,
     and return the results and trained models for each left-out debate.
     """
-
     all_debates = df["debate_id"].unique()
     results = {}
     tokenizer = get_tokenizer(model_name)
@@ -445,6 +461,7 @@ def train_lodo(
     for test_debate in tqdm(all_debates, desc="Leave-One-Debate-Out Folds", leave=True):
         tqdm.write(f"Training model with debate '{test_debate}' left out for testing.")
         remaining_debates = [d for d in all_debates if d != test_debate]
+        test_size = len(df[df["debate_id"] == test_debate])
         if val:
             val_debate = get_validation_debate(df, remaining_debates)
             val_data = df[df["debate_id"] == val_debate]
@@ -452,14 +469,18 @@ def train_lodo(
             assert (
                 not train_data["debate_id"].isin([test_debate, val_debate]).any()
             ), "Training debates should not include test or validation debate"
+            tqdm.write(f"░░ Validating on debate: {val_debate}")
             tqdm.write(
-                f"░░ Validating on debate: {val_debate} | Train size: {len(train_data)} | Val size: {len(val_data)}"
+                f"░░ Split sizes: {len(train_data)} - {len(val_data)} - {test_size} // {len(train_data)/len(df):.1%} - {len(val_data)/len(df):.1%} - {test_size/len(df):.1%}"
             )
         else:
             train_data = df[df["debate_id"] != test_debate]
             assert not (
                 train_data["debate_id"] == test_debate
             ).any(), "Training debates should not include test debate"
+            tqdm.write(
+                f"░░ Split sizes: {len(train_data)} - {test_size} // {len(train_data)/len(df):.1%} - {test_size/len(df):.1%}"
+            )
         test_data = df[df["debate_id"] == test_debate]
 
         # Prepare datasets and dataloaders
@@ -515,8 +536,8 @@ def train_lodo(
 
         # Evaluate the model on the test debate
         preds, labels, _ = evaluate(model, test_loader, get_device())
-        all_preds.extend(np.concatenate(preds).tolist())
-        all_labels.extend(np.concatenate(labels).tolist())
+        all_preds.extend(preds)
+        all_labels.extend(labels)
         test_metrics = compute_metrics_token_level(preds, labels)
         model_results["test_metrics"] = test_metrics
         tqdm.write(
@@ -555,7 +576,7 @@ def train_lodo(
         f"Overall Macro F1 across all debates: {results['overall']['macro']['f1']:.4f}"
     )
 
-    return results
+    return results, {all_preds, all_labels}
 
 
 # ---------------------------------
@@ -563,7 +584,7 @@ def train_lodo(
 # ---------------------------------
 
 
-def process_results(results: dict, output_dir: Path) -> None:
+def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> None:
     # Save results to JSON
     with (output_dir / "results.json").open("w") as f:
         json.dump(results, f, indent=4, ensure_ascii=False)
@@ -578,6 +599,7 @@ def process_results(results: dict, output_dir: Path) -> None:
     if all(
         [
             results[debate].get("validation_metrics") is not None
+            and len(results[debate]["validation_metrics"]) > 0
             for debate in results
             if debate not in ["overall", "hyperparameters"]
         ]
@@ -585,12 +607,15 @@ def process_results(results: dict, output_dir: Path) -> None:
         # Plot validation metrics if validation was performed
         print("\nPlotting training and validation loss curves...")
         plot_train_val_loss_curves(results, output_dir)
-        print("\nPlotting validation metrics curves...")
+        print("Plotting validation metrics curves...")
         plot_metric_curves(results, output_dir)
     else:
         # Plot training loss curve
         print("\nPlotting training loss curve...")
         plot_train_loss_curve(results, output_dir)
+
+    print("Plotting confusion matrix...")
+    plot_confusion_matrix(all_preds_labels, output_dir)
 
 
 # -------------------------------
@@ -656,12 +681,13 @@ def parse_args() -> argparse.Namespace:
 def main():
     set_random_seed(RANDOM_SEED)
     torch.cuda.empty_cache()
+    torch.set_default_dtype(torch.float32)
     args = parse_args()
 
     df = pd.read_csv(args.input_file)
     print(f"Loaded data with {len(df)} rows from {args.input_file}.")
 
-    model_output_dir = get_model_output_dir(args.dataset_name)
+    model_output_dir = get_model_output_dir(args.dataset_name, args.model_name)
     model_output_dir.mkdir(exist_ok=True, parents=True)
 
     hparams = {
@@ -673,10 +699,12 @@ def main():
         "weight_decay": args.weight_decay,
         "use_crf": args.no_crf,
     }
-    results = train_lodo(df, args.model_name, hparams, args.val, model_output_dir)
+    results, all_preds_labels = train_lodo(
+        df, args.model_name, hparams, args.val, model_output_dir
+    )
     results["hyperparameters"] = hparams
 
-    process_results(results, model_output_dir)
+    process_results(results, all_preds_labels, model_output_dir)
 
 
 if __name__ == "__main__":
