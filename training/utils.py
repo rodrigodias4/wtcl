@@ -7,7 +7,9 @@ import torch
 MODEL_DEFAULT = "distilroberta-base"
 
 CRF_LEARNING_RATE_MULTIPLIER = 10
-TEMPERED_SAMPLING_ALPHA = 0.3
+DEBATE_TEMPERED_SAMPLING_ALPHA = 0.3 # 0: Debates are weighted equally / 1: Original
+BIO_TEMPERED_SAMPLING_ALPHA = 0.6 # 0: Original / 1: Linear weighting of BIO
+BIO_TEMPERED_SAMPLING_EPS = 1.0
 
 # Label mapping
 label_list = ["O", "B", "I"]

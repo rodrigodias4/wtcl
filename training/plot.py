@@ -10,20 +10,22 @@ PLOT_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]  # extend if needed
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 
-def plot_metric_curves(results, output_dir: Path):
+def plot_metric_curves(results: dict, label: str, metric: str, output_dir: Path):
     plt.figure(figsize=(10, 6))
+    max_epochs = 0
 
     for i, (model_name, metrics) in enumerate(results.items()):
         if model_name in ["overall", "hyperparameters"]:
             continue  # Skip overall and hyperparameter metrics for plotting
-        epochs = range(1, len(metrics["validation_metrics"]) + 1)
+        epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
+        max_epochs = max(max_epochs, len(epochs))
 
         plt.plot(
             epochs,
             [
-                metrics["validation_metrics"][i]["macro"]["f1"]
-                for i in range(len(metrics["validation_metrics"]))
+                metrics["validation_metrics"][i][label][metric]
+                for i in range(metrics["best_epoch"])
             ],
             color=plt.get_cmap("plasma")(i / len(results)),
             marker=marker,
@@ -31,77 +33,44 @@ def plot_metric_curves(results, output_dir: Path):
             linestyle="-",
         )
 
-        """ plt.plot(
-            epochs,
-            [metrics["validation_metrics"][i]["micro"]["f1"] for i in range(len(metrics["validation_metrics"]))],
-            color="tab:orange",
-            marker=marker,
-            linestyle="-",
-        )
-
-        plt.plot(
-            epochs,
-            [metrics["validation_metrics"][i]["macro"]["accuracy"] for i in range(len(metrics["validation_metrics"]))],
-            color="tab:green",
-            marker=marker,
-            linestyle="-",
-        )
-
-        plt.plot(
-            epochs,
-            [metrics["validation_metrics"][i]["macro"]["precision"] for i in range(len(metrics["validation_metrics"]))],
-            color="tab:red",
-            marker=marker,
-            linestyle="-",
-        )
-
-        plt.plot(
-            epochs,
-            [metrics["validation_metrics"][i]["macro"]["recall"] for i in range(len(metrics["validation_metrics"]))],
-            color="tab:purple",
-            marker=marker,
-            linestyle="-",
-        ) """
-
     plt.xlabel("Epoch")
     plt.xticks(
         [
             i
             for i in range(
                 1,
-                max(
-                    [len(metrics["validation_metrics"]) for metrics in results.values()]
-                )
-                + 1,
+                max_epochs + 1,
             )
         ]
     )
-    plt.ylabel("Macro F1")
+    plt.ylabel(f"{label.capitalize()} {metric.capitalize()}")
+    plt.yticks([i / 10 for i in range(11)])
     plt.ylim(0, 1)
-    plt.grid(alpha=0.3)
-    plt.title("Validation Macro F1 per Epoch")
-    plt.grid(True)
+    plt.grid(True, alpha=0.3)
+    plt.title(f"Validation {label.capitalize()}-{metric.capitalize()} per Epoch")
 
     plt.tight_layout()
-    plt.savefig(output_dir / "validation_metrics.png", dpi=300)
+    plt.savefig(output_dir / f"validation_{label}_{metric}.png", dpi=300)
 
 
 def plot_train_val_loss_curves(results, output_dir: Path):
     train_color = "tab:blue"
     val_color = "tab:orange"
+    max_epochs = 0
 
     plt.figure(figsize=(10, 6))
 
     for i, (model_name, metrics) in enumerate(results.items()):
         if model_name in ["overall", "hyperparameters"]:
             continue  # Skip overall and hyperparameter metrics for plotting
-        epochs = range(1, len(metrics["training_loss"]) + 1)
+        epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
+        max_epochs = max(max_epochs, len(epochs))
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
 
         # Train
         plt.plot(
             epochs,
-            metrics["training_loss"],
+            metrics["training_loss"][: len(epochs)],
             color=train_color,
             marker=marker,
             mec="white",
@@ -112,7 +81,7 @@ def plot_train_val_loss_curves(results, output_dir: Path):
         # Validation
         plt.plot(
             epochs,
-            metrics["validation_loss"],
+            metrics["validation_loss"][: len(epochs)],
             color=val_color,
             marker=marker,
             mec="white",
@@ -122,18 +91,7 @@ def plot_train_val_loss_curves(results, output_dir: Path):
 
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.xticks(
-        [
-            i
-            for i in range(
-                1,
-                max(
-                    [len(metrics["validation_metrics"]) for metrics in results.values()]
-                )
-                + 1,
-            )
-        ]
-    )
+    plt.xticks([i for i in range(1, max_epochs + 1)])
     plt.grid(alpha=0.3)
     plt.title("Training and Validation Loss Curves")
     plt.grid(True)
@@ -155,12 +113,12 @@ def plot_train_loss_curve(results, output_dir: Path):
     for i, (model_name, metrics) in enumerate(results.items()):
         if model_name in ["overall", "hyperparameters"]:
             continue  # Skip overall and hyperparameter metrics for plotting
-        epochs = range(1, len(metrics["training_loss"]) + 1)
+        epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
 
         plt.plot(
             epochs,
-            metrics["training_loss"],
+            metrics["training_loss"][: len(epochs)],
             marker=marker,
             mec="white",
             linestyle="-",
@@ -211,13 +169,20 @@ def main():
 
     with open(args.results_file, "r") as f:
         results = json.load(f)
+    
+    figures_dir = Path(args.results_file).parent / "figures"
+    figures_dir.mkdir(exist_ok=True)
 
     if args.type in ["train_loss", "all"]:
-        plot_train_loss_curve(results, Path(args.results_file).parent)
+        plot_train_loss_curve(results, figures_dir)
     if args.type in ["val_loss", "all"]:
-        plot_train_val_loss_curves(results, Path(args.results_file).parent)
+        plot_train_val_loss_curves(results, figures_dir)
     if args.type in ["metrics", "all"]:
-        plot_metric_curves(results, Path(args.results_file).parent)
+        for label in ["macro", "B", "I"]:
+            for metric in ["f1", "accuracy", "precision", "recall"]:
+                plot_metric_curves(
+                    results, label, metric, figures_dir
+                )
 
 
 if __name__ == "__main__":

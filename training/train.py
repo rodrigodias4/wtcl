@@ -1,6 +1,7 @@
 import argparse
 import ast
 from collections import defaultdict
+from copy import deepcopy
 from datetime import datetime
 import gc
 import json
@@ -16,7 +17,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader, Dataset, Sampler
-from torch.optim import AdamW
 from tqdm import tqdm
 from transformers import (
     AutoModel,
@@ -25,14 +25,14 @@ from transformers import (
 )
 from transformers.utils import logging
 from torchcrf import CRF
-from seqeval.metrics import classification_report
-from seqeval.scheme import IOB1
 
 from plot import plot_metric_curves, plot_train_loss_curve, plot_train_val_loss_curves
 from plot_cm import plot_confusion_matrix
 from utils import (
+    BIO_TEMPERED_SAMPLING_ALPHA,
+    BIO_TEMPERED_SAMPLING_EPS,
     MODEL_DEFAULT,
-    TEMPERED_SAMPLING_ALPHA,
+    DEBATE_TEMPERED_SAMPLING_ALPHA,
     decay_group,
     get_optimizer,
     get_validation_debate,
@@ -48,7 +48,7 @@ logging.disable_progress_bar()
 
 MAX_LENGTH = 512
 EARLY_STOPPING_DELTA = 0.01
-PATIENCE = 3
+PATIENCE = 2
 
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
@@ -61,9 +61,6 @@ signal.signal(signal.SIGINT, handle_interrupt)
 def set_random_seed(seed: int) -> None:
     """
     Helper function to seed experiment for reproducibility.
-    If -1 is provided as seed, experiment uses random seed from 0~9999
-    Args:
-        seed (int): integer to be used as seed, use -1 to randomly seed experiment
     """
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.enabled = False
@@ -100,25 +97,98 @@ def get_device() -> torch.device:
     return device
 
 
-class TemperedDebateBatchSampler(Sampler):
-    def __init__(self, debate_to_indices, debates, weights, batch_size, num_batches):
+def compute_debate_weights(
+    debates: list, debate_to_indices: dict, alpha: float
+) -> np.ndarray:
+    counts = np.array([len(debate_to_indices[d]) for d in debates])
+    weights = counts**alpha
+    weights = weights / weights.sum()
+    return weights
+
+
+def compute_debate_to_indices(train_data: pd.DataFrame) -> dict:
+    debate_to_indices = defaultdict(list)
+    for idx, row in enumerate(train_data.to_dict("records")):
+        debate_to_indices[row["debate_id"]].append(idx)
+    return debate_to_indices
+
+
+def compute_debate_to_bio_scores(train_data):
+    debate_to_bio_scores = defaultdict(list)
+    B_ID = label2id["B"]
+    I_ID = label2id["I"]
+
+    records = train_data.to_dict("records")
+
+    for idx, row in enumerate(records):
+        labels = np.array(ast.literal_eval(row["labels"]))
+
+        # CRF-relevant BIO signal
+        score = np.sum(labels == B_ID) + np.sum(labels == I_ID)
+
+        # normalization by sequence length to avoid bias towards longer sequences
+        score = score / labels.shape[0]
+
+        debate_to_bio_scores[row["debate_id"]].append(float(score))
+
+    return debate_to_bio_scores
+
+
+class TemperedBatchSampler(Sampler):
+    def __init__(
+        self,
+        debate_to_indices,
+        debate_to_bio_scores,
+        debates,
+        debate_weights,
+        batch_size,
+        num_batches,
+        bio_alpha,
+        bio_eps,
+    ):
         self.debate_to_indices = debate_to_indices
+        self.debate_to_bio_scores = debate_to_bio_scores
         self.debates = debates
-        self.weights = weights
+        self.debate_weights = debate_weights
         self.batch_size = batch_size
         self.num_batches = num_batches
+
+        self.bio_alpha = bio_alpha
+        self.bio_eps = bio_eps
+
         self.debate_schedule = np.random.choice(
-            self.debates,
-            size=self.num_batches,
-            p=self.weights
+            self.debates, size=self.num_batches, p=self.debate_weights
         )
+
+    def _sample_from_debate(self, debate):
+        indices = self.debate_to_indices[debate]
+        bio_scores = self.debate_to_bio_scores[debate]
+
+        weights = np.array(bio_scores, dtype=np.float32)
+
+        # BIO-tempered weighting
+        weights = np.power(weights + self.bio_eps, self.bio_alpha)
+
+        # avoid degenerate all-zero case
+        if weights.sum() == 0:
+            return random.sample(indices, self.batch_size)
+
+        weights = weights / weights.sum()
+
+        chosen = np.random.choice(
+            indices, size=self.batch_size, replace=False, p=weights
+        )
+
+        return chosen.tolist()
 
     def __iter__(self):
         for i in range(self.num_batches):
+            # Tempered sampling of debates at the batch level
             d = self.debate_schedule[i]
-            indices = self.debate_to_indices[d]
 
-            batch = random.sample(indices, self.batch_size)
+            # Tempered sampling of sequences within the chosen debate based on BIO scores
+            batch = self._sample_from_debate(d)
+
             yield batch
 
     def __len__(self):
@@ -133,13 +203,13 @@ class WTCLModel(nn.Module):
             device_map=get_device(),
             dtype=torch.float32,
         )
-        if hparams:
-            self.transformer.config.hidden_dropout_prob = 0.2
-            self.transformer.config.attention_probs_dropout_prob = 0.2
+        self.transformer.config.hidden_dropout_prob = 0.2
+        self.transformer.config.attention_probs_dropout_prob = 0.2
 
         for name, param in self.transformer.named_parameters():
-            if "encoder.layer.1" in name:
-                param.requires_grad = False
+            for i in range(hparams["freeze"]):
+                if f"encoder.layer.{i}" in name:
+                    param.requires_grad = False
 
         hidden_size = self.transformer.config.hidden_size
 
@@ -389,7 +459,9 @@ def train(
     model_results["validation_metrics"] = []
     best_macro_f1 = -1.0
     epochs_no_improve = 0
-    for epoch in tqdm(range(epochs), leave=False, desc="Training Epochs"):
+    best_epoch = 0
+    best_model_state = None
+    for epoch in tqdm(range(1, epochs + 1), leave=False, desc="Training Epochs"):
         model.train()
         total_training_loss = 0
         total_sequences = 0
@@ -435,21 +507,24 @@ def train(
             if validation_metrics["macro"]["f1"] > best_macro_f1 + EARLY_STOPPING_DELTA:
                 best_macro_f1 = validation_metrics["macro"]["f1"]
                 epochs_no_improve = 0
-                validation_metrics["best_epoch"] = epoch
-                validation_metrics["best_macro_f1"] = best_macro_f1
+                best_model_state = deepcopy(model.state_dict())
+                best_epoch = epoch
+                model_results["best_epoch"] = best_epoch
             else:
                 epochs_no_improve += 1
-            validation_metrics["epochs_no_improve"] = epochs_no_improve
+
             tqdm.write(
                 f"░░ Epoch {epoch}: "
-                f"TL={training_loss:.4f}, "
-                f"VL={val_loss:.4f}, "
-                f"M-F1={validation_metrics['macro']['f1']:.4f}, "
-                f"m-F1={validation_metrics['micro']['f1']:.4f}, "
-                f"A={validation_metrics['macro']['accuracy']:.4f}, "
-                f"P={validation_metrics['macro']['precision']:.4f}, "
-                f"R={validation_metrics['macro']['recall']:.4f}\t"
-                f"{'↓' * validation_metrics['epochs_no_improve']}"
+                f"TL={training_loss:.2f}, "
+                f"VL={val_loss:.2f}, "
+                f"M-F1={validation_metrics['macro']['f1']:.3f}, "
+                f"B-F1={validation_metrics['B']['f1']:.3f} "
+                f"I-F1={validation_metrics['I']['f1']:.3f} "
+                # f"m-F1={validation_metrics['micro']['f1']:.3f}, "
+                f"A={validation_metrics['macro']['accuracy']:.3f}, "
+                f"P={validation_metrics['macro']['precision']:.3f}, "
+                f"R={validation_metrics['macro']['recall']:.3f}"
+                f"{('\t' + '✪') if epoch == best_epoch else ''}"
             )
             if epochs_no_improve >= PATIENCE:
                 tqdm.write(
@@ -460,7 +535,7 @@ def train(
             tqdm.write(f"░░ Epoch {epoch}: TL={training_loss:.4f}")
         gc.collect()
         torch.cuda.empty_cache()
-    return model_results
+    return model_results, best_model_state
 
 
 def train_lodo(
@@ -487,7 +562,8 @@ def train_lodo(
 
     all_preds = []
     all_labels = []
-    
+
+    os.makedirs(model_output_dir / "folds", exist_ok=True)
     with (model_output_dir / "hyperparameters.json").open("w") as f:
         json.dump(hparams, f, indent=4, ensure_ascii=False)
 
@@ -516,16 +592,24 @@ def train_lodo(
                 f"░░ Split sizes: {len(train_data)} - {test_size} // {len(train_data)/len(df):.1%} - {test_size/len(df):.1%}"
             )
 
-        debate_to_indices = defaultdict(list)
-        for idx, row in enumerate(train_data.to_dict("records")):
-            debate_to_indices[row["debate_id"]].append(idx)
+        # Debate-level weighted sampling setup
+        debate_to_indices = compute_debate_to_indices(train_data)
+        debate_weights = compute_debate_weights(
+            remaining_debates, debate_to_indices, hparams["debate_alpha"]
+        )
 
-        counts = np.array([len(debate_to_indices[d]) for d in remaining_debates])
-        weights = counts**hparams["tempered_sampling_alpha"]
-        weights = weights / weights.sum()
+        # Compute debate-level BIO scores for tempered sampling
+        debate_to_bio_scores = compute_debate_to_bio_scores(train_data)
 
-        batch_sampler = TemperedDebateBatchSampler(
-            debate_to_indices, remaining_debates, weights, hparams["batch_size"], len(train_data) // hparams["batch_size"]
+        batch_sampler = TemperedBatchSampler(
+            debate_to_indices=debate_to_indices,
+            debate_to_bio_scores=debate_to_bio_scores,
+            debates=remaining_debates,
+            debate_weights=debate_weights,
+            batch_size=hparams["batch_size"],
+            num_batches=len(train_data) // hparams["batch_size"],
+            bio_alpha=hparams["bio_alpha"],
+            bio_eps=hparams["bio_eps"],
         )
 
         test_data = df[df["debate_id"] == test_debate]
@@ -549,9 +633,7 @@ def train_lodo(
             )
 
         # Create new model instance for each CV fold
-        model = build_model(
-            model_name, {"dropout": hparams["dropout"], "use_crf": hparams["use_crf"]}
-        )
+        model = build_model(model_name, hparams)
 
         # Set up optimizer and scheduler
         optimizer = get_optimizer(model, hparams)
@@ -565,7 +647,7 @@ def train_lodo(
         )
 
         # Train the model
-        model_results = train(
+        model_results, best_model_state = train(
             model,
             train_loader,
             optimizer,
@@ -576,10 +658,11 @@ def train_lodo(
         )
 
         # Save the model for this debate
-        with (model_output_dir / f"{test_debate}.pt").open("wb") as f:
-            torch.save(model.state_dict(), f)
+        with (model_output_dir / "folds" / f"{test_debate}.pt").open("wb") as f:
+            torch.save(best_model_state, f)
 
         # Evaluate the model on the test debate
+        model.load_state_dict(best_model_state)
         preds, labels, _ = evaluate(model, test_loader, get_device())
         all_preds.extend(preds)
         all_labels.extend(labels)
@@ -608,20 +691,21 @@ def train_lodo(
         )
 
     results["overall"] = {}
-    results["overall"]["macro"] = {}
-    results["overall"]["micro"] = {}
-    for metric in ["f1", "precision", "recall"]:
-        results["overall"]["macro"][metric] = np.mean(
-            [results[debate]["test_metrics"]["macro"][metric] for debate in all_debates]
-        )
-        results["overall"]["micro"][metric] = np.mean(
-            [results[debate]["test_metrics"]["micro"][metric] for debate in all_debates]
-        )
+
+    for label in ["macro", "micro", "B", "I"]:
+        results["overall"][label] = {}
+        for metric in ["f1", "precision", "recall"]:
+            results["overall"][label][metric] = np.mean(
+                [
+                    results[debate]["test_metrics"][label][metric]
+                    for debate in all_debates
+                ]
+            )
     tqdm.write(
         f"Overall Macro F1 across all debates: {results['overall']['macro']['f1']:.4f}"
     )
 
-    return results, {all_preds, all_labels}
+    return results, {"preds": all_preds, "labels": all_labels}
 
 
 # ---------------------------------
@@ -633,6 +717,9 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
     # Save results to JSON
     with (output_dir / "results.json").open("w") as f:
         json.dump(results, f, indent=4, ensure_ascii=False)
+
+    figures_dir = output_dir / "figures"
+    figures_dir.mkdir(exist_ok=True)
 
     # Print overall results
     print("\nPer-left-out-debate results:")
@@ -651,16 +738,18 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
     ):
         # Plot validation metrics if validation was performed
         print("\nPlotting training and validation loss curves...")
-        plot_train_val_loss_curves(results, output_dir)
+        plot_train_val_loss_curves(results, figures_dir)
         print("Plotting validation metrics curves...")
-        plot_metric_curves(results, output_dir)
+        for label in ["macro", "B", "I"]:
+            for metric in ["f1", "accuracy", "precision", "recall"]:
+                plot_metric_curves(results, label, metric, figures_dir)
     else:
         # Plot training loss curve
         print("\nPlotting training loss curve...")
-        plot_train_loss_curve(results, output_dir)
+        plot_train_loss_curve(results, figures_dir)
 
     print("Plotting confusion matrix...")
-    plot_confusion_matrix(all_preds_labels, output_dir)
+    plot_confusion_matrix(all_preds_labels, figures_dir)
 
 
 # -------------------------------
@@ -711,10 +800,34 @@ def parse_args() -> argparse.Namespace:
         help="Weight decay for the optimizer.",
     )
     parser.add_argument(
-        "--tempered_sampling_alpha",
+        "--debate_alpha",
         type=float,
-        default=TEMPERED_SAMPLING_ALPHA,
+        default=DEBATE_TEMPERED_SAMPLING_ALPHA,
         help="Tempered sampling alpha for debate sampling.",
+    )
+    parser.add_argument(
+        "--bio_alpha",
+        type=float,
+        default=BIO_TEMPERED_SAMPLING_ALPHA,
+        help="Tempered sampling alpha for BIO score sampling.",
+    )
+    parser.add_argument(
+        "--bio_eps",
+        type=float,
+        default=BIO_TEMPERED_SAMPLING_EPS,
+        help="Small epsilon to avoid zero probabilities in BIO score sampling.",
+    )
+    parser.add_argument(
+        "--freeze",
+        type=int,
+        default=0,
+        help="Number of initial transformer layers to freeze during training.",
+    )
+    parser.add_argument(
+        "--comment",
+        type=str,
+        default="",
+        help="Optional comment to include in the saved hyperparameters for context.",
     )
     parser.add_argument(
         "--no_crf",
@@ -749,9 +862,13 @@ def main():
         "warmup_ratio": args.warmup_ratio,
         "weight_decay": args.weight_decay,
         "use_crf": args.no_crf,
-        "tempered_sampling_alpha": args.tempered_sampling_alpha,
+        "debate_alpha": args.debate_alpha,
+        "bio_alpha": args.bio_alpha,
+        "bio_eps": args.bio_eps,
+        "freeze": args.freeze,
+        "comment": args.comment,
     }
-    
+
     results, all_preds_labels = train_lodo(
         df, args.model_name, hparams, args.val, model_output_dir
     )

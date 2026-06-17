@@ -113,7 +113,7 @@ def objective(
             num_training_steps=total_steps,
         )
 
-        results = train(
+        results, _ = train(
             model,
             train_loader,
             optimizer,
@@ -123,7 +123,8 @@ def objective(
             val_loader,
         )
         fold_metrics.append(results)
-        trial.report(results["validation_metrics"][-1]["macro"]["f1"], step)
+        best_epoch = results["best_epoch"] # 1-indexed
+        trial.report(results["validation_metrics"][best_epoch - 1]["macro"]["f1"], step)
 
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
@@ -134,7 +135,7 @@ def objective(
         torch.cuda.empty_cache()
 
     deciding_metric = sum(
-        [metrics["validation_metrics"][-1]["macro"]["f1"] for metrics in fold_metrics]
+        [metrics["validation_metrics"][metrics["best_epoch"] - 1]["macro"]["f1"] for metrics in fold_metrics]
     ) / len(fold_metrics)
 
     study_trials[trial.number] = {
@@ -162,7 +163,9 @@ def process_results(results: dict, all_preds_labels: dict, best_params: dict, st
         )
 
     plot_train_val_loss_curves(results, study_output_path.parent)
-    plot_metric_curves(results, study_output_path.parent)
+    for label in ["macro", "B", "I"]:
+            for metric in ["f1", "accuracy", "precision", "recall"]:
+                plot_metric_curves(results, label, metric, study_output_path.parent)
     plot_confusion_matrix(all_preds_labels, study_output_path.parent)
 
 
