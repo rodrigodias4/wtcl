@@ -45,17 +45,20 @@ from utils import (
 
 logging.set_verbosity_error()
 logging.disable_progress_bar()
+script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 MAX_LENGTH = 512
 EARLY_STOPPING_DELTA = 0.01
 PATIENCE = 2
 
-script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-
-# Set random seeds for reproducibility
 RANDOM_SEED = 42
 
 signal.signal(signal.SIGINT, handle_interrupt)
+
+
+# -------------------------------
+# Helper Functions
+# -------------------------------
 
 
 def set_random_seed(seed: int) -> None:
@@ -84,7 +87,6 @@ def get_model_output_dir(dataset_name: str, model_name: str) -> Path:
     )
 
 
-# Device setup
 def get_device() -> torch.device:
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -97,9 +99,21 @@ def get_device() -> torch.device:
     return device
 
 
+# --------------------------------
+# Debate and BIO-tempered sampling
+# --------------------------------
+
+
 def compute_debate_weights(
     debates: list, debate_to_indices: dict, alpha: float
 ) -> np.ndarray:
+    """
+    Compute weights for each debate based on their sequence counts and a tempered sampling parameter.
+    @param debates: List of debate IDs.
+    @param debate_to_indices: Dictionary mapping debate IDs to their sequence indices.
+    @param alpha: Tempered sampling parameter.
+    @return: Numpy array of debate weights.
+    """
     counts = np.array([len(debate_to_indices[d]) for d in debates])
     weights = counts**alpha
     weights = weights / weights.sum()
@@ -107,6 +121,11 @@ def compute_debate_weights(
 
 
 def compute_debate_to_indices(train_data: pd.DataFrame) -> dict:
+    """
+    Compute a mapping from debate IDs to their sequence indices.
+    @param train_data: Training data as a pandas DataFrame.
+    @return: Dictionary mapping debate IDs to lists of sequence indices.
+    """
     debate_to_indices = defaultdict(list)
     for idx, row in enumerate(train_data.to_dict("records")):
         debate_to_indices[row["debate_id"]].append(idx)
@@ -114,6 +133,11 @@ def compute_debate_to_indices(train_data: pd.DataFrame) -> dict:
 
 
 def compute_debate_to_bio_scores(train_data):
+    """
+    Compute BIO scores for each debate based on their sequence labels.
+    @param train_data: Training data as a pandas DataFrame.
+    @return: Dictionary mapping debate IDs to lists of BIO scores.
+    """
     debate_to_bio_scores = defaultdict(list)
     B_ID = label2id["B"]
     I_ID = label2id["I"]
@@ -161,6 +185,11 @@ class TemperedBatchSampler(Sampler):
         )
 
     def _sample_from_debate(self, debate):
+        """
+        Sample sequences from a given debate based on BIO scores.
+        @param debate: Debate ID to sample from.
+        @return: List of sampled indices for the batch."""
+
         indices = self.debate_to_indices[debate]
         bio_scores = self.debate_to_bio_scores[debate]
 
@@ -193,6 +222,11 @@ class TemperedBatchSampler(Sampler):
 
     def __len__(self):
         return self.num_batches
+
+
+# --------------------------------
+# Model Definition
+# --------------------------------
 
 
 class WTCLModel(nn.Module):
@@ -261,11 +295,18 @@ class WTCLModel(nn.Module):
 
 
 def build_model(model_name: str, hparams: dict = None) -> nn.Module:
+    # Currently, we only have one model class, but this function allows for easy extension in the future.
     return WTCLModel(model_name, hparams)
 
 
 # Tokenizer
 def get_tokenizer(model_name: str) -> AutoTokenizer:
+    """
+    Get the tokenizer for the specified model.
+    @param model_name: Name of the transformer model to use.
+    @return: AutoTokenizer instance for the specified model.
+    """
+
     return AutoTokenizer.from_pretrained(model_name)
 
 
@@ -275,6 +316,15 @@ def encode(
     tokenizer: AutoTokenizer,
     max_length: int,
 ) -> dict:
+    """
+    Encode text and labels for the model.
+
+    @param text: Input text to encode.
+    @param labels: List of labels corresponding to the tokens in the text.
+    @param tokenizer: Tokenizer to use for encoding.
+    @param max_length: Maximum sequence length for padding/truncation.
+    @return: Dictionary containing encoded input_ids, attention_mask, and labels.
+    """
     enc = tokenizer(
         text,
         add_special_tokens=False,
@@ -293,7 +343,11 @@ def encode(
     return enc
 
 
-# Dataset definition
+# --------------------------------
+# Dataset Definition
+# --------------------------------
+
+
 class WTCLDataset(Dataset):
     def __init__(self, data, tokenizer, max_length):
         self.data = data
@@ -348,6 +402,15 @@ def compute_micro_f1(metrics: dict) -> float:
 
 
 def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) -> dict:
+    """
+    Compute token-level metrics (F1, precision, recall, accuracy) for each class and overall.
+
+    @param preds: List of lists of predicted labels for each token.
+    @param labels: List of lists of true labels for each token.
+    @param num_labels: Number of unique labels/classes.
+    @return: Dictionary containing metrics for each class and aggregations (macro, micro).
+    """
+
     # Pad predictions and labels to the same length
     flat_preds = []
     flat_labels = []
@@ -414,6 +477,14 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
 
 
 def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> tuple:
+    """
+    Evaluate the model on a given dataloader and return predictions, labels, and loss.
+
+    @param model: The model to evaluate.
+    @param dataloader: DataLoader for the evaluation data.
+    @param device: Device to run the evaluation on (CPU/GPU).
+    @return: Tuple containing predictions, labels, and average loss.
+    """
     model.eval()
 
     if len(dataloader) == 0:
@@ -452,7 +523,20 @@ def train(
     device: torch.device,
     epochs: int,
     val_loader: DataLoader = None,
-) -> dict:
+) -> tuple[dict, dict]:
+    """
+    Train the model with optional validation and early stopping.
+    Returns the training results and the best model state.
+
+    @param model: The model to train.
+    @param train_loader: DataLoader for the training data.
+    @param optimizer: Optimizer for training.
+    @param scheduler: Learning rate scheduler.
+    @param device: Device to run the training on (CPU/GPU).
+    @param epochs: Number of training epochs.
+    @param val_loader: Optional DataLoader for validation data.
+    @return: Tuple containing training results and the best model state.
+    """
     model_results = {}
     model_results["training_loss"] = []
     model_results["validation_loss"] = []
@@ -508,8 +592,8 @@ def train(
                 best_macro_f1 = validation_metrics["macro"]["f1"]
                 epochs_no_improve = 0
                 best_model_state = deepcopy(model.state_dict())
-                best_epoch = epoch
                 model_results["best_epoch"] = best_epoch
+                best_epoch = epoch
             else:
                 epochs_no_improve += 1
 
@@ -528,7 +612,7 @@ def train(
             )
             if epochs_no_improve >= PATIENCE:
                 tqdm.write(
-                    f"Early stopping at epoch {epoch} due to no improvement in validation f1."
+                    f"Early stopping at epoch {best_epoch} due to no improvement in validation f1."
                 )
                 break
         else:
@@ -549,6 +633,13 @@ def train_lodo(
     Leave-one-debate-out training function.
     For each debate, we train a model on all other debates and evaluate on the left-out debate,
     and return the results and trained models for each left-out debate.
+
+    @param df: DataFrame containing the dataset with 'debate_id', 'text', and 'labels'.
+    @param model_name: Name of the transformer model to use.
+    @param hparams: Dictionary of hyperparameters for training.
+    @param val: Boolean indicating whether to perform validation during training.
+    @param model_output_dir: Directory to save the trained models and results.
+    @return: Tuple containing the results dictionary and a dictionary of all predictions and labels.
     """
     all_debates = df["debate_id"].unique()
     results = {}
@@ -572,6 +663,8 @@ def train_lodo(
         tqdm.write(f"Training model with debate '{test_debate}' left out for testing.")
         remaining_debates = [d for d in all_debates if d != test_debate]
         test_size = len(df[df["debate_id"] == test_debate])
+
+        # Split the data into training, validation, and test sets
         if val:
             val_debate = get_validation_debate(df, remaining_debates)
             val_data = df[df["debate_id"] == val_debate]
@@ -618,12 +711,8 @@ def train_lodo(
         train_dataset = WTCLDataset(
             train_data.to_dict("records"), tokenizer, MAX_LENGTH
         )
-        test_dataset = WTCLDataset(test_data.to_dict("records"), tokenizer, MAX_LENGTH)
-
         train_loader = DataLoader(train_dataset, batch_sampler=batch_sampler)
-        test_loader = DataLoader(
-            test_dataset, batch_size=hparams["batch_size"], shuffle=False
-        )
+
         if val:
             val_dataset = WTCLDataset(
                 val_data.to_dict("records"), tokenizer, MAX_LENGTH
@@ -657,21 +746,29 @@ def train_lodo(
             val_loader,
         )
 
-        # Save the model for this debate
+        # Save the best model state for this debate
         with (model_output_dir / "folds" / f"{test_debate}.pt").open("wb") as f:
             torch.save(best_model_state, f)
 
-        # Evaluate the model on the test debate
+        # Create test split dataset and dataloader
+        test_dataset = WTCLDataset(test_data.to_dict("records"), tokenizer, MAX_LENGTH)
+        test_loader = DataLoader(
+            test_dataset, batch_size=hparams["batch_size"], shuffle=False
+        )
+
+        # Evaluate the best model state on the test debate
         model.load_state_dict(best_model_state)
         preds, labels, _ = evaluate(model, test_loader, get_device())
         all_preds.extend(preds)
         all_labels.extend(labels)
+
+        # Compute token-level metrics for the test split
         test_metrics = compute_metrics_token_level(preds, labels)
         model_results["test_metrics"] = test_metrics
+        results[test_debate] = model_results
         tqdm.write(
             f"Debate '{test_debate}' - Macro F1: {test_metrics['macro']['f1']:.4f}"
         )
-        results[test_debate] = model_results
 
         del (
             model,
@@ -681,6 +778,7 @@ def train_lodo(
             test_dataset,
             preds,
             labels,
+            best_model_state,
         )  # Free up memory
         gc.collect()
         torch.cuda.empty_cache()
@@ -691,10 +789,15 @@ def train_lodo(
         )
 
     results["overall"] = {}
-
-    for label in ["macro", "micro", "B", "I"]:
+    
+    # Compile best epochs and compute median best epoch across debates
+    results["overall"]["best_epochs"] = [results[debate]["best_epoch"] for debate in all_debates]
+    results["overall"]["best_epoch_median"] = int(np.median(results["overall"]["best_epochs"]))
+    
+    # Compute average metrics across debates for each label and metric
+    for label in ["macro", "micro", "B", "I", "O"]:
         results["overall"][label] = {}
-        for metric in ["f1", "precision", "recall"]:
+        for metric in ["f1", "precision", "recall", "accuracy"]:
             results["overall"][label][metric] = np.mean(
                 [
                     results[debate]["test_metrics"][label][metric]
@@ -748,6 +851,7 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
         print("\nPlotting training loss curve...")
         plot_train_loss_curve(results, figures_dir)
 
+    # Plot confusion matrix
     print("Plotting confusion matrix...")
     plot_confusion_matrix(all_preds_labels, figures_dir)
 
@@ -763,7 +867,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset_name",
         type=str,
-        default="wtcl",
+        default="",
         help="Name of the dataset (for saving models)",
     )
     parser.add_argument(
@@ -847,6 +951,8 @@ def main():
     torch.cuda.empty_cache()
     torch.set_default_dtype(torch.float32)
     args = parse_args()
+    if args.dataset_name == "":
+        args.dataset_name = Path(args.input_file).name.split(".")[0].split("_")[0]
 
     df = pd.read_csv(args.input_file)
     print(f"Loaded data with {len(df)} rows from {args.input_file}.")
