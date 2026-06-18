@@ -4,6 +4,8 @@ import sys
 import pandas as pd
 import torch
 
+from rich.progress import MofNCompleteColumn, TimeElapsedColumn, track, Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, SpinnerColumn, Column
+
 MODEL_DEFAULT = "distilroberta-base"
 
 CRF_LEARNING_RATE_MULTIPLIER = 10
@@ -115,3 +117,21 @@ def get_optimizer(model, hparams):
             ]
         )
     return torch.optim.AdamW(optimizer_params)
+
+def create_progress_bar(console) -> Progress:
+    """
+    Create a rich progress bar with a spinner and time remaining.
+    """
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=None),
+        MofNCompleteColumn(table_column=Column(justify="right", width=10)),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        transient=True,
+        console=console
+    )
+    return progress

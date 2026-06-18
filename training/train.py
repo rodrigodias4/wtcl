@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader, Dataset, Sampler
-from tqdm import tqdm
+from rich.console import Console
 from transformers import (
     AutoModel,
     AutoTokenizer,
@@ -35,6 +35,7 @@ from utils import (
     EMISSION_BIAS_I,
     MODEL_DEFAULT,
     DEBATE_TEMPERED_SAMPLING_ALPHA,
+    create_progress_bar,
     decay_group,
     get_optimizer,
     get_validation_debate,
@@ -45,6 +46,8 @@ from utils import (
     no_decay_group,
 )
 
+console = Console()
+progress = create_progress_bar(console)
 logging.set_verbosity_error()
 logging.disable_progress_bar()
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -276,10 +279,10 @@ class WTCLModel(nn.Module):
         if hparams["crf_priors"] and self.crf is not None:
             with torch.no_grad():
                 self.crf.transitions[O_ID, B_ID] = 2.0
+                self.crf.transitions[O_ID, I_ID] = -10000.0
                 self.crf.transitions[B_ID, I_ID] = 2.0
                 self.crf.transitions[I_ID, I_ID] = 2.0
                 self.crf.transitions[I_ID, O_ID] = 1.0
-                self.crf.transitions[O_ID, I_ID] = -10000.0
 
     def forward(
         self,
@@ -581,12 +584,15 @@ def train(
     epochs_no_improve = 0
     best_epoch = 0
     best_model_state = None
-    for epoch in tqdm(range(1, epochs + 1), leave=False, desc="Training Epochs"):
+
+    progress_task_epochs = progress.add_task("Training Epochs", total=epochs)
+    for epoch in range(1, epochs + 1):
         model.train()
         total_training_loss = 0
         total_sequences = 0
 
-        for batch in tqdm(train_loader, leave=False, desc="Batches"):
+        progress_task_batches = progress.add_task(f"Batches", total=len(train_loader))
+        for batch in train_loader:
             optimizer.zero_grad()
             batch_size = batch["input_ids"].size(0)
 
@@ -606,6 +612,8 @@ def train(
 
             total_sequences += batch_size
             total_training_loss += loss.item() * batch_size
+
+            progress.update(progress_task_batches, advance=1)
 
         training_loss = total_training_loss / total_sequences
         model_results["training_loss"].append(training_loss)
@@ -633,7 +641,7 @@ def train(
             else:
                 epochs_no_improve += 1
 
-            tqdm.write(
+            console.print(
                 f"░░ Epoch {epoch}: "
                 f"TL={training_loss:.2f}, "
                 f"VL={val_loss:.2f}, "
@@ -647,14 +655,17 @@ def train(
                 f"{('\t' + '✪') if epoch == best_epoch else ''}"
             )
             if epochs_no_improve >= PATIENCE:
-                tqdm.write(
+                console.print(
                     f"Early stopping at epoch {best_epoch} due to no improvement in validation f1."
                 )
                 break
         else:
-            tqdm.write(f"░░ Epoch {epoch}: TL={training_loss:.4f}")
+            console.print(f"░░ Epoch {epoch}: TL={training_loss:.4f}")
+        progress.remove_task(progress_task_batches)
+        progress.update(progress_task_epochs, advance=1)
         gc.collect()
         torch.cuda.empty_cache()
+    progress.remove_task(progress_task_epochs)
     return model_results, best_model_state
 
 
@@ -684,10 +695,10 @@ def train_lodo(
     tokenizer = get_tokenizer(model_name)
     val_loader = None
 
-    print(f"Training with model '{model_name}'\nHyperparameters:")
-    [print(f"‣ {k}: {v}") for k, v in hparams.items()]
-    print(f"Leave-one-debate-out training on {len(all_debates)} debates.")
-    print(f"Validation enabled: {val}")
+    console.print(f"Training with model '{model_name}'\nHyperparameters:")
+    [console.print(f"‣ {k}: {v}") for k, v in hparams.items()]
+    console.print(f"Leave-one-debate-out training on {len(all_debates)} debates.")
+    console.print(f"Validation enabled: {val}")
 
     all_preds = []
     all_labels = []
@@ -696,9 +707,13 @@ def train_lodo(
     with (model_output_dir / "hyperparameters.json").open("w") as f:
         json.dump(hparams, f, indent=4, ensure_ascii=False)
 
+    progress.start()
+    progress_folds = progress.add_task(
+        "Leave-One-Debate-Out Folds", total=len(all_debates)
+    )
     # Leave-one-debate-out
-    for test_debate in tqdm(all_debates, desc="Leave-One-Debate-Out Folds", leave=True):
-        tqdm.write(f"Training model with debate '{test_debate}' left out for testing.")
+    for test_debate in all_debates:
+        console.rule(f"Fold for test debate: {test_debate}")
         remaining_debates = [d for d in all_debates if d != test_debate]
         test_size = len(df[df["debate_id"] == test_debate])
 
@@ -710,17 +725,17 @@ def train_lodo(
             assert (
                 not train_data["debate_id"].isin([test_debate, val_debate]).any()
             ), "Training debates should not include test or validation debate"
-            tqdm.write(f"░░ Validating on debate: {val_debate}")
-            tqdm.write(
-                f"░░ Split sizes: {len(train_data)} - {len(val_data)} - {test_size} // {len(train_data)/len(df):.1%} - {len(val_data)/len(df):.1%} - {test_size/len(df):.1%}"
+            console.print(f"Validating on debate: {val_debate}")
+            console.print(
+                f"Split sizes: {len(train_data)} - {len(val_data)} - {test_size} // {len(train_data)/len(df):.1%} - {len(val_data)/len(df):.1%} - {test_size/len(df):.1%}"
             )
         else:
             train_data = df[df["debate_id"] != test_debate]
             assert not (
                 train_data["debate_id"] == test_debate
             ).any(), "Training debates should not include test debate"
-            tqdm.write(
-                f"░░ Split sizes: {len(train_data)} - {test_size} // {len(train_data)/len(df):.1%} - {test_size/len(df):.1%}"
+            console.print(
+                f"Split sizes: {len(train_data)} - {test_size} // {len(train_data)/len(df):.1%} - {test_size/len(df):.1%}"
             )
 
         # Debate-level weighted sampling setup
@@ -760,7 +775,7 @@ def train_lodo(
             )
 
         # Create new model instance for each CV fold
-        model = build_model(model_name, hparams)
+        model = build_model(model_name, hparams).to(get_device())
 
         # Set up optimizer and scheduler
         optimizer = get_optimizer(model, hparams)
@@ -805,8 +820,13 @@ def train_lodo(
         test_metrics = compute_metrics_token_level(preds, labels)
         model_results["test_metrics"] = test_metrics
         results[test_debate] = model_results
-        tqdm.write(
-            f"░░ Debate '{test_debate}' - Macro F1: {test_metrics['macro']['f1']:.4f}"
+        console.print(
+            f"Test | "
+            f"M-F1={test_metrics['macro']['f1']:.3f}, "
+            f"B-F1={test_metrics['B']['f1']:.3f}, "
+            f"I-F1={test_metrics['I']['f1']:.3f}, "
+            f"P={test_metrics['macro']['precision']:.3f}, "
+            f"R={test_metrics['macro']['recall']:.3f}"
         )
 
         # Compute span-level metrics for the test split
@@ -823,8 +843,11 @@ def train_lodo(
             labels,
             best_model_state,
         )  # Free up memory
+        progress.update(progress_folds, advance=1)
         gc.collect()
         torch.cuda.empty_cache()
+    progress.remove_task(progress_folds)
+    progress.stop()
 
     with (model_output_dir / f"all_preds_labels.json").open("w") as f:
         json.dump(
@@ -851,7 +874,7 @@ def train_lodo(
                     for debate in all_debates
                 ]
             )
-    tqdm.write(
+    console.print(
         f"Overall Macro F1 across all debates: {results['overall']['macro']['f1']:.4f}"
     )
 
@@ -864,27 +887,30 @@ def train_lodo(
 
 
 def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> None:
+    console.rule("Final Results and Plots")
     # Save results to JSON
     with (output_dir / "results.json").open("w") as f:
         json.dump(results, f, indent=4, ensure_ascii=False)
-    print(f"Results saved to {output_dir / 'results.json'}")
+    console.print(f"Results saved to {output_dir / 'results.json'}")
 
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(exist_ok=True)
 
     # Print overall results
-    print("\nPer-left-out-debate results:")
+    console.print("\nPer-left-out-debate results:")
     for debate, metrics in results.items():
         if debate in ["overall", "hyperparameters"]:
             continue
-        print(f"Debate '{debate}': M-F1 = {metrics['test_metrics']['macro']['f1']:.4f}")
+        console.print(
+            f"Debate '{debate}': M-F1 = {metrics['test_metrics']['macro']['f1']:.4f}"
+        )
 
-    print("\nSpan-level average metrics:")
-    print(
-        f"░░ Span F1: {results['overall']['span']['f1']:.4f}, "
-        f"Span Precision: {results['overall']['span']['precision']:.4f}, "
-        f"Span Recall: {results['overall']['span']['recall']:.4f}, "
-        f"Span Accuracy: {results['overall']['span']['accuracy']:.4f}"
+    console.print("\nSpan-level average metrics:")
+    console.print(
+        f"░░ F1: {results['overall']['span']['f1']:.4f}, "
+        f"Precision: {results['overall']['span']['precision']:.4f}, "
+        f"Recall: {results['overall']['span']['recall']:.4f}, "
+        f"Accuracy: {results['overall']['span']['accuracy']:.4f}"
     )
 
     if all(
@@ -905,7 +931,7 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
     # Plot confusion matrix
     plot_confusion_matrix(all_preds_labels, figures_dir)
 
-    print(f"\nPlots saved to {figures_dir}")
+    console.print(f"\nPlots saved to {figures_dir}")
 
 
 # -------------------------------
@@ -1022,7 +1048,7 @@ def main():
         args.dataset_name = Path(args.input_file).name.split(".")[0].split("_")[0]
 
     df = pd.read_csv(args.input_file)
-    print(f"Loaded data with {len(df)} rows from {args.input_file}.")
+    console.print(f"Loaded data with {len(df)} rows from {args.input_file}.")
 
     model_output_dir = get_model_output_dir(
         args.dataset_name, args.model_name, args.comment
