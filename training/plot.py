@@ -5,6 +5,8 @@ from pathlib import Path
 
 from matplotlib import pyplot as plt, lines as mlines
 
+from utils import console
+
 PLOT_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]  # extend if needed
 
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -15,7 +17,7 @@ def plot_metric_curve_single(results: dict, label: str, metric: str, output_dir:
     max_epochs = 0
 
     for i, (model_name, metrics) in enumerate(results.items()):
-        if model_name in ["overall", "hyperparameters"]:
+        if model_name == "overall":
             continue  # Skip overall and hyperparameter metrics for plotting
         epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
@@ -54,16 +56,16 @@ def plot_metric_curve_single(results: dict, label: str, metric: str, output_dir:
 
 
 def plot_metric_curves(results: dict, output_dir: Path):
-    print("Plotting validation metrics curves...")
+    console.print("Plotting validation metrics curves...\n")
     for label in ["macro", "B", "I"]:
-        print(f"Metrics for {label}:")
+        console.print(f"Metrics for {label}:")
         for metric in ["f1", "accuracy", "precision", "recall"]:
-            print(f"░░ {metric}: {results['overall'][label][metric]}")
+            console.print(f"░░ {metric.capitalize()}: {results['overall'][label][metric]}")
             plot_metric_curve_single(results, label, metric, output_dir)
 
 
 def plot_train_val_loss_curves(results, output_dir: Path):
-    print("Plotting training and validation loss curves...")
+    console.print("Plotting training and validation loss curves...")
     train_color = "tab:blue"
     val_color = "tab:orange"
     max_epochs = 0
@@ -71,7 +73,7 @@ def plot_train_val_loss_curves(results, output_dir: Path):
     plt.figure(figsize=(10, 6))
 
     for i, (model_name, metrics) in enumerate(results.items()):
-        if model_name in ["overall", "hyperparameters"]:
+        if model_name == "overall":
             continue  # Skip overall and hyperparameter metrics for plotting
         epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
         max_epochs = max(max_epochs, len(epochs))
@@ -119,10 +121,10 @@ def plot_train_val_loss_curves(results, output_dir: Path):
 
 
 def plot_train_loss_curve(results, output_dir: Path):
-    print("Plotting training loss curve...")
+    console.print("Plotting training loss curve...")
     plt.figure(figsize=(8, 5))
     for i, (model_name, metrics) in enumerate(results.items()):
-        if model_name in ["overall", "hyperparameters"]:
+        if model_name == "overall":
             continue  # Skip overall and hyperparameter metrics for plotting
         epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
@@ -137,11 +139,7 @@ def plot_train_loss_curve(results, output_dir: Path):
         )
 
     plt.legend(
-        [
-            model_name
-            for model_name in results.keys()
-            if model_name not in ["overall", "hyperparameters"]
-        ],
+        [model_name for model_name in results.keys() if model_name != "overall"],
         loc="upper right",
     )
     plt.xticks(epochs)
@@ -191,7 +189,7 @@ def main():
     if args.type in ["metrics", "all"]:
         plot_metric_curves(results, figures_dir)
 
-    print(f"Plots saved to {figures_dir}")
+    console.print(f"Plots saved to {figures_dir}")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader, Dataset, Sampler
-from rich.console import Console
+
 from transformers import (
     AutoModel,
     AutoTokenizer,
@@ -25,6 +25,8 @@ from transformers import (
 )
 from transformers.utils import logging
 from torchcrf import CRF
+from optuna.trial import Trial
+from optuna.exceptions import TrialPruned
 
 from plot import plot_metric_curves, plot_train_loss_curve, plot_train_val_loss_curves
 from plot_cm import compute_metrics_span_level, plot_confusion_matrix
@@ -35,19 +37,16 @@ from utils import (
     EMISSION_BIAS_I,
     MODEL_DEFAULT,
     DEBATE_TEMPERED_SAMPLING_ALPHA,
-    create_progress_bar,
-    decay_group,
     get_optimizer,
     get_validation_debate,
     handle_interrupt,
     label2id,
     id2label,
     label_list,
-    no_decay_group,
+    console,
+    progress,
 )
 
-console = Console()
-progress = create_progress_bar(console)
 logging.set_verbosity_error()
 logging.disable_progress_bar()
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -613,8 +612,8 @@ def train(
             total_sequences += batch_size
             total_training_loss += loss.item() * batch_size
 
-            progress.update(progress_task_batches, advance=1)
-
+            progress.advance(progress_task_batches)
+        progress.remove_task(progress_task_batches)
         training_loss = total_training_loss / total_sequences
         model_results["training_loss"].append(training_loss)
 
@@ -652,7 +651,7 @@ def train(
                 f"A={validation_metrics['macro']['accuracy']:.3f}, "
                 f"P={validation_metrics['macro']['precision']:.3f}, "
                 f"R={validation_metrics['macro']['recall']:.3f}"
-                f"{('\t' + '✪') if epoch == best_epoch else ''}"
+                f"{('\t' + '[magenta]★[/magenta]') if epoch == best_epoch else ''}"
             )
             if epochs_no_improve >= PATIENCE:
                 console.print(
@@ -660,9 +659,8 @@ def train(
                 )
                 break
         else:
-            console.print(f"░░ Epoch {epoch}: TL={training_loss:.4f}")
-        progress.remove_task(progress_task_batches)
-        progress.update(progress_task_epochs, advance=1)
+            console.print(f"░░ Epoch {epoch}: TL={training_loss:.3f}")
+        progress.advance(progress_task_epochs)
         gc.collect()
         torch.cuda.empty_cache()
     progress.remove_task(progress_task_epochs)
@@ -676,6 +674,7 @@ def train_lodo(
     val: bool,
     model_output_dir: Path,
     save: bool = False,
+    trial: Trial = None,
 ) -> tuple[dict, dict]:
     """
     Leave-one-debate-out training function.
@@ -688,6 +687,7 @@ def train_lodo(
     @param val: Boolean indicating whether to perform validation during training.
     @param model_output_dir: Directory to save the trained models and results.
     @param save: Boolean indicating whether to save the trained models to disk.
+    @param trial: Optional Optuna trial object for hyperparameter optimization.
     @return: Tuple containing the results dictionary and a dictionary of all predictions and labels.
     """
     all_debates = df["debate_id"].unique()
@@ -703,16 +703,18 @@ def train_lodo(
     all_preds = []
     all_labels = []
 
-    os.makedirs(model_output_dir / "folds", exist_ok=True)
-    with (model_output_dir / "hyperparameters.json").open("w") as f:
-        json.dump(hparams, f, indent=4, ensure_ascii=False)
+    if model_output_dir is not None:
+        os.makedirs(model_output_dir / "folds", exist_ok=True)
+        with (model_output_dir / "hyperparameters.json").open("w") as f:
+            json.dump(hparams, f, indent=4, ensure_ascii=False)
 
-    progress.start()
+    if not trial:
+        progress.start()
     progress_folds = progress.add_task(
         "Leave-One-Debate-Out Folds", total=len(all_debates)
     )
     # Leave-one-debate-out
-    for test_debate in all_debates:
+    for i, test_debate in enumerate(all_debates):
         console.rule(f"Fold for test debate: {test_debate}")
         remaining_debates = [d for d in all_debates if d != test_debate]
         test_size = len(df[df["debate_id"] == test_debate])
@@ -800,7 +802,7 @@ def train_lodo(
         )
 
         # Save the best model state for this debate
-        if save:
+        if save and best_model_state is not None and model_output_dir is not None:
             with (model_output_dir / "folds" / f"{test_debate}.pt").open("wb") as f:
                 torch.save(best_model_state, f)
 
@@ -820,18 +822,34 @@ def train_lodo(
         test_metrics = compute_metrics_token_level(preds, labels)
         model_results["test_metrics"] = test_metrics
         results[test_debate] = model_results
+
+        # Compute span-level metrics for the test split
+        span_metrics = compute_metrics_span_level({"preds": preds, "labels": labels})
+        model_results["test_metrics"]["span"] = span_metrics
+
+        # Print test metrics for the current debate
         console.print(
             f"Test | "
             f"M-F1={test_metrics['macro']['f1']:.3f}, "
             f"B-F1={test_metrics['B']['f1']:.3f}, "
             f"I-F1={test_metrics['I']['f1']:.3f}, "
+            f"S-F1={span_metrics['f1']:.3f}"
+            f"A={test_metrics['macro']['accuracy']:.3f}, "
             f"P={test_metrics['macro']['precision']:.3f}, "
-            f"R={test_metrics['macro']['recall']:.3f}"
+            f"R={test_metrics['macro']['recall']:.3f}, "
         )
 
-        # Compute span-level metrics for the test split
-        span_metrics = compute_metrics_span_level({"preds": preds, "labels": labels})
-        model_results["test_metrics"]["span"] = span_metrics
+        # Report to Optuna trial if provided
+        if trial is not None:
+            trial.report(
+                model_results["validation_metrics"][model_results["best_epoch"] - 1][
+                    "macro"
+                ]["f1"],
+                i,
+            )
+
+            if trial.should_prune():
+                raise TrialPruned()
 
         del (
             model,
@@ -843,16 +861,21 @@ def train_lodo(
             labels,
             best_model_state,
         )  # Free up memory
-        progress.update(progress_folds, advance=1)
+        progress.advance(progress_folds)
         gc.collect()
         torch.cuda.empty_cache()
     progress.remove_task(progress_folds)
-    progress.stop()
+    if not trial:
+        progress.stop()
 
-    with (model_output_dir / f"all_preds_labels.json").open("w") as f:
-        json.dump(
-            {"preds": all_preds, "labels": all_labels}, f, ensure_ascii=False, indent=4
-        )
+    if model_output_dir is not None:
+        with (model_output_dir / f"all_preds_labels.json").open("w") as f:
+            json.dump(
+                {"preds": all_preds, "labels": all_labels},
+                f,
+                ensure_ascii=False,
+                indent=4,
+            )
 
     results["overall"] = {}
 
@@ -865,7 +888,7 @@ def train_lodo(
     )
 
     # Compute average metrics across debates for each label and metric
-    for label in ["macro", "micro", "B", "I", "O", "span"]:
+    for label in ["macro", "micro", "B", "I", "O"]:
         results["overall"][label] = {}
         for metric in ["f1", "precision", "recall", "accuracy"]:
             results["overall"][label][metric] = np.mean(
@@ -874,8 +897,8 @@ def train_lodo(
                     for debate in all_debates
                 ]
             )
-    console.print(
-        f"Overall Macro F1 across all debates: {results['overall']['macro']['f1']:.4f}"
+    results["overall"]["span"] = compute_metrics_span_level(
+        {"preds": all_preds, "labels": all_labels}
     )
 
     return results, {"preds": all_preds, "labels": all_labels}
@@ -896,21 +919,32 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(exist_ok=True)
 
-    # Print overall results
+    # Print per-left-out-debate results
     console.print("\nPer-left-out-debate results:")
     for debate, metrics in results.items():
-        if debate in ["overall", "hyperparameters"]:
+        if debate == "overall":
             continue
         console.print(
-            f"Debate '{debate}': M-F1 = {metrics['test_metrics']['macro']['f1']:.4f}"
+            f"Debate '{debate}': M-F1 = {metrics['test_metrics']['macro']['f1']:.3f}"
         )
 
-    console.print("\nSpan-level average metrics:")
+    # Print overall results
     console.print(
-        f"░░ F1: {results['overall']['span']['f1']:.4f}, "
-        f"Precision: {results['overall']['span']['precision']:.4f}, "
-        f"Recall: {results['overall']['span']['recall']:.4f}, "
-        f"Accuracy: {results['overall']['span']['accuracy']:.4f}"
+        f"Overall metrics: "
+        f"M-F1={results['overall']['macro']['f1']:.3f}, "
+        f"B-F1={results['overall']['B']['f1']:.3f}, "
+        f"I-F1={results['overall']['I']['f1']:.3f}, "
+        f"A={results['overall']['macro']['accuracy']:.3f}, "
+        f"P={results['overall']['macro']['precision']:.3f}, "
+        f"R={results['overall']['macro']['recall']:.3f}"
+    )
+
+    console.print(
+        f"\nSpan-level metrics: "
+        f"F1={results['overall']['span']['f1']:.3f}, "
+        f"P={results['overall']['span']['precision']:.3f}, "
+        f"R={results['overall']['span']['recall']:.3f}, "
+        f"A={results['overall']['span']['accuracy']:.3f}"
     )
 
     if all(
@@ -918,7 +952,7 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
             results[debate].get("validation_metrics") is not None
             and len(results[debate]["validation_metrics"]) > 0
             for debate in results
-            if debate not in ["overall", "hyperparameters"]
+            if debate != "overall"
         ]
     ):
         # Plot validation metrics if validation was performed

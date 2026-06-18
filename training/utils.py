@@ -4,7 +4,17 @@ import sys
 import pandas as pd
 import torch
 
-from rich.progress import MofNCompleteColumn, TimeElapsedColumn, track, Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, SpinnerColumn, Column
+from rich.console import Console
+from rich.progress import (
+    MofNCompleteColumn,
+    TimeElapsedColumn,
+    Progress,
+    TextColumn,
+    BarColumn,
+    TimeRemainingColumn,
+    SpinnerColumn,
+    Column,
+)
 
 MODEL_DEFAULT = "distilroberta-base"
 
@@ -21,9 +31,11 @@ label_list = ["O", "B", "I"]
 label2id = {l: i for i, l in enumerate(label_list)}
 id2label = {i: l for l, i in label2id.items()}
 
+console = Console()
+
 
 def handle_interrupt(signum, frame):
-    # print("\nKeyboardInterrupt detected. Running garbage collection...")
+    # console.print("\nKeyboardInterrupt detected. Running garbage collection...")
 
     # Force garbage collection
     gc.collect()
@@ -106,17 +118,18 @@ def get_optimizer(model, hparams):
             [
                 {
                     "params": decay_group(model.crf),
-                    "lr": 1e-3,
+                    "lr": 1e-3 if not hparams["crf_priors"] else 5e-4,
                     "weight_decay": 0.0,  # IMPORTANT: no decay on CRF
                 },
                 {
                     "params": no_decay_group(model.crf),
-                    "lr": 1e-3,
+                    "lr": 1e-3 if not hparams["crf_priors"] else 5e-4,
                     "weight_decay": 0.0,
                 },
             ]
         )
     return torch.optim.AdamW(optimizer_params)
+
 
 def create_progress_bar(console) -> Progress:
     """
@@ -132,6 +145,9 @@ def create_progress_bar(console) -> Progress:
         TextColumn("•"),
         TimeRemainingColumn(),
         transient=True,
-        console=console
+        console=console,
     )
     return progress
+
+
+progress = create_progress_bar(console)

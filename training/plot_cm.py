@@ -5,18 +5,18 @@ from pathlib import Path
 
 import numpy as np
 
-from utils import label_list, id2label, label2id
+from utils import label_list, id2label, label2id, console
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
 import argparse
-from seqeval.metrics import classification_report
+from seqeval.metrics import accuracy_score, classification_report
 
 
 def plot_confusion_matrix(
     all_preds_labels: dict, output_dir: Path, normalize: bool = True
 ):
-    print("Plotting confusion matrix...")
+    console.print("Plotting confusion matrix...")
     y_true_seqs = deepcopy(all_preds_labels["labels"])
     y_pred_seqs = deepcopy(all_preds_labels["preds"])
     y_true = []
@@ -65,7 +65,6 @@ def plot_confusion_matrix(
 
 
 def compute_metrics_span_level(all_preds_labels: dict) -> dict:
-    print("Generating span metrics...")
     y_true_seqs = deepcopy(all_preds_labels["labels"])
     y_pred_seqs = deepcopy(all_preds_labels["preds"])
 
@@ -98,6 +97,7 @@ def compute_metrics_span_level(all_preds_labels: dict) -> dict:
         "f1": report["macro avg"]["f1-score"],
         "precision": report["macro avg"]["precision"],
         "recall": report["macro avg"]["recall"],
+        "accuracy": accuracy_score(y_true_seqs, y_pred_seqs),
     }
 
 
@@ -121,7 +121,14 @@ def main():
     figures_dir.mkdir(exist_ok=True)
 
     plot_confusion_matrix(all_preds_labels, figures_dir, normalize=True)
-    compute_metrics_span_level(all_preds_labels)
+    span_metrics = compute_metrics_span_level(all_preds_labels)
+    console.print(
+        f"Span metrics: "
+        f"F1={span_metrics['f1']:.3f}"
+        f"A={span_metrics['accuracy']:.3f}, "
+        f"P={span_metrics['precision']:.3f}, "
+        f"R={span_metrics['recall']:.3f}, "
+    )
 
 
 if __name__ == "__main__":

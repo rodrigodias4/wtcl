@@ -2,37 +2,33 @@ import argparse
 import datetime
 import gc
 import json
+import os
 from pathlib import Path
 import signal
 
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 import optuna
-from transformers import get_linear_schedule_with_warmup
 
 from train import (
-    MAX_LENGTH,
     RANDOM_SEED,
-    WTCLDataset,
-    build_model,
-    get_device,
     get_model_output_dir,
-    get_tokenizer,
     set_random_seed,
-    train,
     train_lodo,
     script_dir,
 )
 from plot import plot_train_val_loss_curves, plot_metric_curves
 from training.plot_cm import plot_confusion_matrix
 from utils import (
-    get_optimizer,
-    get_validation_debate,
+    BIO_TEMPERED_SAMPLING_ALPHA,
+    BIO_TEMPERED_SAMPLING_EPS,
+    DEBATE_TEMPERED_SAMPLING_ALPHA,
     MODEL_DEFAULT,
     handle_interrupt,
+    console,
+    progress,
 )
+from rich.progress import TaskID
 
 datetime_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 study_trials = {}
@@ -59,115 +55,41 @@ def objective(
     trial: optuna.Trial,
     df: pd.DataFrame,
     model_name: str,
-    fixed_hparams: dict = None,
-    study_output_path: Path = None,
+    fixed_hparams: dict,
+    progress_task_trials: TaskID = None,
 ) -> float:
     hparams = sample_hparams(trial)
+    hparams = hparams | fixed_hparams  # Merge sampled hyperparameters with fixed ones
 
-    fold_metrics = []
-    step = 0
-    debates = df["debate_id"].unique()
-    tokenizer = get_tokenizer(model_name)
-    tqdm.write(f"Trial {trial.number} with hyperparameters: {hparams}")
-    for test_debate in tqdm(debates, desc="Leave-One-Debate-Out Folds"):
-        tqdm.write(f"Tuning models with {test_debate} left out as test debate")
+    console.rule(f"Trial {trial.number}")
 
-        train_val_debates = list([d for d in debates if d != test_debate])
-        val_debate = get_validation_debate(df, train_val_debates)
-        train_debates = [d for d in train_val_debates if d != val_debate]
+    # Train the model with the current set of hyperparameters and get the fold metrics
+    fold_metrics, _ = train_lodo(df, model_name, hparams, False, None, False, trial)
 
-        # Prepare datasets and dataloaders
-        train_data = df[df["debate_id"].isin(train_debates)]
-        val_data = df[df["debate_id"] == val_debate]
-        assert (
-            not val_data["debate_id"].isin(train_debates).any()
-        ), "Validation debate should not be in training debates"
-        tqdm.write(
-            f"Validating on debate: {val_debate} | Train size: {len(train_data)} | Val size: {len(val_data)}"
-        )
-        train_dataset = WTCLDataset(
-            train_data.to_dict("records"), tokenizer, MAX_LENGTH
-        )
-        val_dataset = WTCLDataset(val_data.to_dict("records"), tokenizer, MAX_LENGTH)
-        train_loader = DataLoader(
-            train_dataset, batch_size=hparams["batch_size"], shuffle=True
-        )
-        val_loader = DataLoader(
-            val_dataset, batch_size=hparams["batch_size"], shuffle=False
-        )
-        del (
-            train_data,
-            train_dataset,
-            val_dataset,
-            val_debate,
-            train_debates,
-            train_val_debates,
-        )  # Free up memory
-
-        model = build_model(model_name, hparams | fixed_hparams)
-        optimizer = get_optimizer(model, hparams)
-        total_steps = len(train_loader) * fixed_hparams["num_epochs"]
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=int(hparams["warmup_ratio"] * total_steps),
-            num_training_steps=total_steps,
-        )
-
-        results, _ = train(
-            model,
-            train_loader,
-            optimizer,
-            scheduler,
-            get_device(),
-            fixed_hparams["num_epochs"],
-            val_loader,
-        )
-        fold_metrics.append(results)
-        best_epoch = results["best_epoch"] # 1-indexed
-        trial.report(results["validation_metrics"][best_epoch - 1]["macro"]["f1"], step)
-
-        if trial.should_prune():
-            raise optuna.exceptions.TrialPruned()
-
-        step += 1
-
-        gc.collect()
-        torch.cuda.empty_cache()
-
+    # Compute the deciding metric (average macro F1 across all debates) for this trial
     deciding_metric = sum(
-        [metrics["validation_metrics"][metrics["best_epoch"] - 1]["macro"]["f1"] for metrics in fold_metrics]
+        [
+            metrics["validation_metrics"][metrics["best_epoch"] - 1]["macro"]["f1"]
+            for metrics in fold_metrics
+        ]
     ) / len(fold_metrics)
 
+    # Store the trial results in the global study_trials dictionary
     study_trials[trial.number] = {
         "hparams": hparams,
         "fold_metrics": fold_metrics,
         "deciding_metric": deciding_metric,
     }
 
+    # Free up memory after each trial
     gc.collect()
     torch.cuda.empty_cache()
+
+    # Advance the progress bar for hyperparameter tuning trials
+    if progress_task_trials is not None:
+        progress.update(progress_task_trials, advance=1)
+
     return deciding_metric
-
-
-# ------------------------------------------
-# Results processing and plotting calls
-# ------------------------------------------
-
-
-def process_results(results: dict, all_preds_labels: dict, best_params: dict, study_output_path: Path) -> None:
-    with (study_output_path).open("a") as f:
-        json.dump(
-            {"best_params": best_params, "results": results, "trials": study_trials},
-            f,
-            indent=4,
-        )
-
-    plot_train_val_loss_curves(results, study_output_path.parent)
-    for label in ["macro", "B", "I"]:
-            for metric in ["f1", "accuracy", "precision", "recall"]:
-                plot_metric_curves(results, label, metric, study_output_path.parent)
-    plot_confusion_matrix(all_preds_labels, study_output_path.parent)
-
 
 # ------------------------------------------
 # Main functions to run hyperparameter tuning
@@ -198,55 +120,71 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Whether to use a CRF layer on top of the transformer model.",
     )
+    # TODO: Add additional hyperparameters
     args = parser.parse_args()
     return args
 
 
 def main():
     set_random_seed(RANDOM_SEED)
-
     args = parse_args()
+    study_name = f"study_{args.input_file.name.split('.')[0].split('_')[0]}_{args.model_name.split("/")[-1]}_{datetime_now}"
 
-    study_name = f"study_{args.input_file.name.split('.')[0].split('_')[0]}_{args.model_name}_{datetime_now}"
-
+    # Create a new Optuna study for hyperparameter tuning
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
         pruner=optuna.pruners.MedianPruner(),
         study_name=study_name,
     )
+
+    fixed_hparams = {
+        "use_crf": True,
+        "debate_alpha": DEBATE_TEMPERED_SAMPLING_ALPHA,
+        "bio_alpha": BIO_TEMPERED_SAMPLING_ALPHA,
+        "bio_eps": BIO_TEMPERED_SAMPLING_EPS,
+        "crf_priors": False,
+        "emission_bias": False,
+        "freeze": 0,
+    }
+
+    # Create output directory for the study results
     study_output_path = script_dir / "studies" / f"{study_name}.json"
-    with study_output_path.open("w") as f:
-        pass  # Create empty file
+    os.makedirs(study_output_path.parent, exist_ok=True, parents=True)
 
     df = pd.read_csv(args.input_file)
-    print(f"Loaded {len(df)} rows from {args.input_file}")
+    console.print(f"Loaded {len(df)} rows from {args.input_file}")
 
+    # Start the progress bar for hyperparameter tuning trials
+    progress_task_trials = progress.add_task(
+        f"Hyperparameter Tuning Trials", total=args.num_trials
+    )
+    progress.start()
+
+    # Run hyperparameter tuning with Optuna
     study.optimize(
         lambda trial: objective(
             trial,
             df,
             args.model_name,
-            fixed_hparams={"num_epochs": args.num_epochs, "use_crf": args.use_crf},
-            study_output_path=study_output_path,
+            fixed_hparams=fixed_hparams,
+            progress_task_trials=progress_task_trials,
         ),
         n_trials=args.num_trials,
         show_progress_bar=True,
     )
-    best_params = study.best_trial.params.copy()
-    print("Best hyperparameters:", best_params)
+
+    # Stop the progress bar for hyperparameter tuning trials
+    progress.remove_task(progress_task_trials)
+    progress.stop()
+
+    console.rule(f"Study Results")
+    console.print(f"Best trial number: {study.best_trial.number}")
+    console.print(f"Best trial value (average macro F1): {study.best_trial.value:.4f}")
+    console.print("Best hyperparameters:")
+    [console.print(f"‣ {key}: {value}") for key, value in study.best_trial.params.items()]
 
     del study  # Free up memory
-
-    # Train final model with best hyperparameters on the full dataset
-    model_output_dir = get_model_output_dir(args.input_file.split("/")[-1].split("_")[0].split(".")[0], args.model_name)
-    model_output_dir.mkdir(exist_ok=True, parents=True)
-    final_hparams = best_params | {
-        "num_epochs": args.num_epochs,
-        "use_crf": args.use_crf,
-    }
-    results, all_preds_labels = train_lodo(df, args.model_name, final_hparams, True, model_output_dir)
-    process_results(results, all_preds_labels, best_params)
 
 
 if __name__ == "__main__":
