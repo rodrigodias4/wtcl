@@ -27,10 +27,12 @@ from transformers.utils import logging
 from torchcrf import CRF
 
 from plot import plot_metric_curves, plot_train_loss_curve, plot_train_val_loss_curves
-from plot_cm import plot_confusion_matrix
+from plot_cm import compute_metrics_span_level, plot_confusion_matrix
 from utils import (
     BIO_TEMPERED_SAMPLING_ALPHA,
     BIO_TEMPERED_SAMPLING_EPS,
+    EMISSION_BIAS_B,
+    EMISSION_BIAS_I,
     MODEL_DEFAULT,
     DEBATE_TEMPERED_SAMPLING_ALPHA,
     decay_group,
@@ -48,10 +50,14 @@ logging.disable_progress_bar()
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 MAX_LENGTH = 512
-EARLY_STOPPING_DELTA = 0.01
-PATIENCE = 2
+EARLY_STOPPING_DELTA = 0.0075  # Minimum improvement in validation macro F1 to reset early stopping counter (0.75%)
+PATIENCE = 2  # Number of epochs to wait for improvement before early stopping
 
 RANDOM_SEED = 42
+
+B_ID = label2id["B"]
+I_ID = label2id["I"]
+O_ID = label2id["O"]
 
 signal.signal(signal.SIGINT, handle_interrupt)
 
@@ -77,13 +83,16 @@ def set_random_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def get_model_output_dir(dataset_name: str, model_name: str) -> Path:
+def get_model_output_dir(dataset_name: str, model_name: str, comment: str = "") -> Path:
     return (
         Path(os.path.dirname(os.path.abspath(__file__)))
         / "models"
         / dataset_name
         / model_name.split("/")[-1]
-        / datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        / (
+            datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            + (f" {comment}" if comment else "")
+        )
     )
 
 
@@ -148,7 +157,7 @@ def compute_debate_to_bio_scores(train_data):
         labels = np.array(ast.literal_eval(row["labels"]))
 
         # CRF-relevant BIO signal
-        score = np.sum(labels == B_ID) + np.sum(labels == I_ID)
+        score = 2 * np.sum(labels == B_ID) + 0.5 * np.sum(labels == I_ID)
 
         # normalization by sequence length to avoid bias towards longer sequences
         score = score / labels.shape[0]
@@ -240,10 +249,20 @@ class WTCLModel(nn.Module):
         self.transformer.config.hidden_dropout_prob = 0.2
         self.transformer.config.attention_probs_dropout_prob = 0.2
 
+        # Freeze the first N layers of the transformer if specified in hyperparameters
         for name, param in self.transformer.named_parameters():
             for i in range(hparams["freeze"]):
                 if f"encoder.layer.{i}" in name:
                     param.requires_grad = False
+
+        # Set emission bias for CRF if specified in hyperparameters
+        emission_bias = [0.0 for _ in range(len(label_list))]
+        if hparams["emission_bias"]:
+            emission_bias[B_ID] = EMISSION_BIAS_B
+            emission_bias[I_ID] = EMISSION_BIAS_I
+        self.emission_bias = torch.tensor(
+            emission_bias, dtype=torch.float32, device=get_device()
+        )
 
         hidden_size = self.transformer.config.hidden_size
 
@@ -253,17 +272,32 @@ class WTCLModel(nn.Module):
         if self.use_crf:
             self.crf = CRF(len(label_list), batch_first=True)
 
+        # Set CRF priors if specified in hyperparameters
+        if hparams["crf_priors"] and self.crf is not None:
+            with torch.no_grad():
+                self.crf.transitions[O_ID, B_ID] = 2.0
+                self.crf.transitions[B_ID, I_ID] = 2.0
+                self.crf.transitions[I_ID, I_ID] = 2.0
+                self.crf.transitions[I_ID, O_ID] = 1.0
+                self.crf.transitions[O_ID, I_ID] = -10000.0
+
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor = None,
     ) -> dict:
+        # Get transformer output
         transformer_output = self.transformer(
             input_ids=input_ids, attention_mask=attention_mask
         )
+        # Apply dropout
         dropout_output = self.dropout(transformer_output.last_hidden_state)
+        # Compute logits
         logits = self.fc(dropout_output)
+        # Add emission bias to logits for CRF
+        logits = logits + self.emission_bias
+
         result = {}
 
         if self.use_crf:
@@ -281,6 +315,7 @@ class WTCLModel(nn.Module):
             result["predictions"] = self.crf.decode(logits, mask=attention_mask.bool())
         else:
             if labels is not None:
+                # Compute cross-entropy loss for non-CRF case
                 loss = F.cross_entropy(
                     logits.view(-1, logits.shape[-1]),
                     labels.view(-1),
@@ -289,6 +324,7 @@ class WTCLModel(nn.Module):
                 )
                 result["loss"] = loss
 
+            # Get predictions by taking the argmax of logits for non-CRF case
             result["predictions"] = torch.argmax(logits, dim=-1).cpu().tolist()
 
         return result
@@ -628,6 +664,7 @@ def train_lodo(
     hparams: dict,
     val: bool,
     model_output_dir: Path,
+    save: bool = False,
 ) -> tuple[dict, dict]:
     """
     Leave-one-debate-out training function.
@@ -639,6 +676,7 @@ def train_lodo(
     @param hparams: Dictionary of hyperparameters for training.
     @param val: Boolean indicating whether to perform validation during training.
     @param model_output_dir: Directory to save the trained models and results.
+    @param save: Boolean indicating whether to save the trained models to disk.
     @return: Tuple containing the results dictionary and a dictionary of all predictions and labels.
     """
     all_debates = df["debate_id"].unique()
@@ -747,8 +785,9 @@ def train_lodo(
         )
 
         # Save the best model state for this debate
-        with (model_output_dir / "folds" / f"{test_debate}.pt").open("wb") as f:
-            torch.save(best_model_state, f)
+        if save:
+            with (model_output_dir / "folds" / f"{test_debate}.pt").open("wb") as f:
+                torch.save(best_model_state, f)
 
         # Create test split dataset and dataloader
         test_dataset = WTCLDataset(test_data.to_dict("records"), tokenizer, MAX_LENGTH)
@@ -767,8 +806,12 @@ def train_lodo(
         model_results["test_metrics"] = test_metrics
         results[test_debate] = model_results
         tqdm.write(
-            f"Debate '{test_debate}' - Macro F1: {test_metrics['macro']['f1']:.4f}"
+            f"░░ Debate '{test_debate}' - Macro F1: {test_metrics['macro']['f1']:.4f}"
         )
+
+        # Compute span-level metrics for the test split
+        span_metrics = compute_metrics_span_level({"preds": preds, "labels": labels})
+        model_results["test_metrics"]["span"] = span_metrics
 
         del (
             model,
@@ -789,13 +832,17 @@ def train_lodo(
         )
 
     results["overall"] = {}
-    
+
     # Compile best epochs and compute median best epoch across debates
-    results["overall"]["best_epochs"] = [results[debate]["best_epoch"] for debate in all_debates]
-    results["overall"]["best_epoch_median"] = int(np.median(results["overall"]["best_epochs"]))
-    
+    results["overall"]["best_epochs"] = [
+        results[debate]["best_epoch"] for debate in all_debates
+    ]
+    results["overall"]["best_epoch_median"] = int(
+        np.median(results["overall"]["best_epochs"])
+    )
+
     # Compute average metrics across debates for each label and metric
-    for label in ["macro", "micro", "B", "I", "O"]:
+    for label in ["macro", "micro", "B", "I", "O", "span"]:
         results["overall"][label] = {}
         for metric in ["f1", "precision", "recall", "accuracy"]:
             results["overall"][label][metric] = np.mean(
@@ -820,6 +867,7 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
     # Save results to JSON
     with (output_dir / "results.json").open("w") as f:
         json.dump(results, f, indent=4, ensure_ascii=False)
+    print(f"Results saved to {output_dir / 'results.json'}")
 
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(exist_ok=True)
@@ -831,6 +879,14 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
             continue
         print(f"Debate '{debate}': M-F1 = {metrics['test_metrics']['macro']['f1']:.4f}")
 
+    print("\nSpan-level average metrics:")
+    print(
+        f"░░ Span F1: {results['overall']['span']['f1']:.4f}, "
+        f"Span Precision: {results['overall']['span']['precision']:.4f}, "
+        f"Span Recall: {results['overall']['span']['recall']:.4f}, "
+        f"Span Accuracy: {results['overall']['span']['accuracy']:.4f}"
+    )
+
     if all(
         [
             results[debate].get("validation_metrics") is not None
@@ -840,20 +896,16 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
         ]
     ):
         # Plot validation metrics if validation was performed
-        print("\nPlotting training and validation loss curves...")
         plot_train_val_loss_curves(results, figures_dir)
-        print("Plotting validation metrics curves...")
-        for label in ["macro", "B", "I"]:
-            for metric in ["f1", "accuracy", "precision", "recall"]:
-                plot_metric_curves(results, label, metric, figures_dir)
+        plot_metric_curves(results, figures_dir)
     else:
         # Plot training loss curve
-        print("\nPlotting training loss curve...")
         plot_train_loss_curve(results, figures_dir)
 
     # Plot confusion matrix
-    print("Plotting confusion matrix...")
     plot_confusion_matrix(all_preds_labels, figures_dir)
+
+    print(f"\nPlots saved to {figures_dir}")
 
 
 # -------------------------------
@@ -928,6 +980,16 @@ def parse_args() -> argparse.Namespace:
         help="Number of initial transformer layers to freeze during training.",
     )
     parser.add_argument(
+        "--crf_priors",
+        action="store_true",
+        help="Whether to use CRF priors for BIO sequence modeling.",
+    )
+    parser.add_argument(
+        "--emission_bias",
+        action="store_true",
+        help="Whether to use emission bias for CRF layer.",
+    )
+    parser.add_argument(
         "--comment",
         type=str,
         default="",
@@ -937,6 +999,11 @@ def parse_args() -> argparse.Namespace:
         "--no_crf",
         action="store_false",
         help="Whether to disable the CRF layer on top of the transformer model.",
+    )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Whether to save the trained models to disk.",
     )
     parser.add_argument(
         "--val",
@@ -957,7 +1024,9 @@ def main():
     df = pd.read_csv(args.input_file)
     print(f"Loaded data with {len(df)} rows from {args.input_file}.")
 
-    model_output_dir = get_model_output_dir(args.dataset_name, args.model_name)
+    model_output_dir = get_model_output_dir(
+        args.dataset_name, args.model_name, args.comment
+    )
     model_output_dir.mkdir(exist_ok=True, parents=True)
 
     hparams = {
@@ -971,12 +1040,14 @@ def main():
         "debate_alpha": args.debate_alpha,
         "bio_alpha": args.bio_alpha,
         "bio_eps": args.bio_eps,
+        "crf_priors": args.crf_priors,
+        "emission_bias": args.emission_bias,
         "freeze": args.freeze,
         "comment": args.comment,
     }
 
     results, all_preds_labels = train_lodo(
-        df, args.model_name, hparams, args.val, model_output_dir
+        df, args.model_name, hparams, args.val, model_output_dir, args.save
     )
 
     process_results(results, all_preds_labels, model_output_dir)

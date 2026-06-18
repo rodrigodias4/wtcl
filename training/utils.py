@@ -7,18 +7,22 @@ import torch
 MODEL_DEFAULT = "distilroberta-base"
 
 CRF_LEARNING_RATE_MULTIPLIER = 10
-DEBATE_TEMPERED_SAMPLING_ALPHA = 0.3 # 0: Debates are weighted equally / 1: Original
-BIO_TEMPERED_SAMPLING_ALPHA = 0.6 # 0: Original / 1: Linear weighting of BIO
+DEBATE_TEMPERED_SAMPLING_ALPHA = 1.0  # 0: Debates are weighted equally / 1: Original
+BIO_TEMPERED_SAMPLING_ALPHA = 0.0  # 0: Original / 1: Linear weighting of BIO
 BIO_TEMPERED_SAMPLING_EPS = 1.0
+
+EMISSION_BIAS_B = 0.75
+EMISSION_BIAS_I = 0.25
 
 # Label mapping
 label_list = ["O", "B", "I"]
 label2id = {l: i for i, l in enumerate(label_list)}
 id2label = {i: l for l, i in label2id.items()}
 
+
 def handle_interrupt(signum, frame):
-    #print("\nKeyboardInterrupt detected. Running garbage collection...")
-    
+    # print("\nKeyboardInterrupt detected. Running garbage collection...")
+
     # Force garbage collection
     gc.collect()
     torch.cuda.empty_cache()

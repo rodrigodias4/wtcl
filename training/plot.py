@@ -10,7 +10,7 @@ PLOT_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]  # extend if needed
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 
-def plot_metric_curves(results: dict, label: str, metric: str, output_dir: Path):
+def plot_metric_curve_single(results: dict, label: str, metric: str, output_dir: Path):
     plt.figure(figsize=(10, 6))
     max_epochs = 0
 
@@ -53,7 +53,17 @@ def plot_metric_curves(results: dict, label: str, metric: str, output_dir: Path)
     plt.savefig(output_dir / f"validation_{label}_{metric}.png", dpi=300)
 
 
+def plot_metric_curves(results: dict, output_dir: Path):
+    print("Plotting validation metrics curves...")
+    for label in ["macro", "B", "I"]:
+        print(f"Metrics for {label}:")
+        for metric in ["f1", "accuracy", "precision", "recall"]:
+            print(f"░░ {metric}: {results['overall'][label][metric]}")
+            plot_metric_curve_single(results, label, metric, output_dir)
+
+
 def plot_train_val_loss_curves(results, output_dir: Path):
+    print("Plotting training and validation loss curves...")
     train_color = "tab:blue"
     val_color = "tab:orange"
     max_epochs = 0
@@ -109,6 +119,7 @@ def plot_train_val_loss_curves(results, output_dir: Path):
 
 
 def plot_train_loss_curve(results, output_dir: Path):
+    print("Plotting training loss curve...")
     plt.figure(figsize=(8, 5))
     for i, (model_name, metrics) in enumerate(results.items()):
         if model_name in ["overall", "hyperparameters"]:
@@ -158,8 +169,8 @@ def parse_args():
         "--type",
         type=str,
         choices=["train_loss", "val_loss", "metrics", "all"],
+        default="all",
         help="Type of plot to generate",
-        required=True,
     )
     return parser.parse_args()
 
@@ -169,7 +180,7 @@ def main():
 
     with open(args.results_file, "r") as f:
         results = json.load(f)
-    
+
     figures_dir = Path(args.results_file).parent / "figures"
     figures_dir.mkdir(exist_ok=True)
 
@@ -178,11 +189,9 @@ def main():
     if args.type in ["val_loss", "all"]:
         plot_train_val_loss_curves(results, figures_dir)
     if args.type in ["metrics", "all"]:
-        for label in ["macro", "B", "I"]:
-            for metric in ["f1", "accuracy", "precision", "recall"]:
-                plot_metric_curves(
-                    results, label, metric, figures_dir
-                )
+        plot_metric_curves(results, figures_dir)
+
+    print(f"Plots saved to {figures_dir}")
 
 
 if __name__ == "__main__":
