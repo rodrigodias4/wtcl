@@ -12,13 +12,15 @@ PLOT_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]  # extend if needed
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 
-def plot_metric_curve_single(results: dict, label: str, metric: str, output_dir: Path):
+def plot_validation_metric_curve_single(
+    results: dict, label: str, metric: str, output_dir: Path
+):
     plt.figure(figsize=(10, 6))
     max_epochs = 0
 
     for i, (model_name, metrics) in enumerate(results.items()):
         if model_name == "overall":
-            continue  # Skip overall and hyperparameter metrics for plotting
+            continue  # Skip overall for plotting
         epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
         max_epochs = max(max_epochs, len(epochs))
@@ -29,7 +31,7 @@ def plot_metric_curve_single(results: dict, label: str, metric: str, output_dir:
                 metrics["validation_metrics"][i][label][metric]
                 for i in range(metrics["best_epoch"])
             ],
-            color=plt.get_cmap("plasma")(i / len(results)),
+            color=plt.get_cmap("tab10")(i / len(results)),
             marker=marker,
             mec="white",
             linestyle="-",
@@ -55,13 +57,11 @@ def plot_metric_curve_single(results: dict, label: str, metric: str, output_dir:
     plt.savefig(output_dir / f"validation_{label}_{metric}.png", dpi=300)
 
 
-def plot_metric_curves(results: dict, output_dir: Path):
-    console.print("Plotting validation metrics curves...\n")
+def plot_validation_metric_curves(results: dict, output_dir: Path):
+    console.print("Plotting validation metrics curves...")
     for label in ["macro", "B", "I"]:
-        console.print(f"Metrics for {label}:")
         for metric in ["f1", "accuracy", "precision", "recall"]:
-            console.print(f"░░ {metric.capitalize()}: {results['overall'][label][metric]}")
-            plot_metric_curve_single(results, label, metric, output_dir)
+            plot_validation_metric_curve_single(results, label, metric, output_dir)
 
 
 def plot_train_val_loss_curves(results, output_dir: Path):
@@ -74,7 +74,7 @@ def plot_train_val_loss_curves(results, output_dir: Path):
 
     for i, (model_name, metrics) in enumerate(results.items()):
         if model_name == "overall":
-            continue  # Skip overall and hyperparameter metrics for plotting
+            continue  # Skip overall for plotting
         epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
         max_epochs = max(max_epochs, len(epochs))
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
@@ -187,7 +187,7 @@ def main():
     if args.type in ["val_loss", "all"]:
         plot_train_val_loss_curves(results, figures_dir)
     if args.type in ["metrics", "all"]:
-        plot_metric_curves(results, figures_dir)
+        plot_validation_metric_curves(results, figures_dir)
 
     console.print(f"Plots saved to {figures_dir}")
 

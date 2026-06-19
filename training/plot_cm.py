@@ -124,10 +124,10 @@ def main():
     span_metrics = compute_metrics_span_level(all_preds_labels)
     console.print(
         f"Span metrics: "
-        f"F1={span_metrics['f1']:.3f}"
-        f"A={span_metrics['accuracy']:.3f}, "
-        f"P={span_metrics['precision']:.3f}, "
-        f"R={span_metrics['recall']:.3f}, "
+        f"F1={span_metrics['f1']:.1%}"
+        f"A={span_metrics['accuracy']:.1%}, "
+        f"P={span_metrics['precision']:.1%}, "
+        f"R={span_metrics['recall']:.1%}, "
     )
 
 

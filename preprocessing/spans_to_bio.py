@@ -204,7 +204,9 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    output_file = f"{args.input_file.split('.')[0]}_bio_{args.model_name.split('/')[-1]}.csv"
+    output_file = (
+        f"{args.input_file.split('.')[0]}_bio_{args.model_name.split('/')[-1]}.csv"
+    )
     print(f"Processing file: {args.input_file}")
     print(f"Using model: {args.model_name}")
     print(f"Output will be saved to: {output_file}")

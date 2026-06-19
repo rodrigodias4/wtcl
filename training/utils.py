@@ -118,12 +118,12 @@ def get_optimizer(model, hparams):
             [
                 {
                     "params": decay_group(model.crf),
-                    "lr": 1e-3 if not hparams["crf_priors"] else 5e-4,
+                    "lr": 1e-3,
                     "weight_decay": 0.0,  # IMPORTANT: no decay on CRF
                 },
                 {
                     "params": no_decay_group(model.crf),
-                    "lr": 1e-3 if not hparams["crf_priors"] else 5e-4,
+                    "lr": 1e-3,
                     "weight_decay": 0.0,
                 },
             ]
@@ -146,6 +146,7 @@ def create_progress_bar(console) -> Progress:
         TimeRemainingColumn(),
         transient=True,
         console=console,
+        speed_estimate_period=60*30,
     )
     return progress
 

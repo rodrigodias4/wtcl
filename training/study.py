@@ -1,5 +1,5 @@
 import argparse
-import datetime
+from datetime import datetime
 import gc
 import json
 import os
@@ -17,8 +17,6 @@ from train import (
     train_lodo,
     script_dir,
 )
-from plot import plot_train_val_loss_curves, plot_metric_curves
-from training.plot_cm import plot_confusion_matrix
 from utils import (
     BIO_TEMPERED_SAMPLING_ALPHA,
     BIO_TEMPERED_SAMPLING_EPS,
@@ -43,11 +41,13 @@ signal.signal(signal.SIGINT, handle_interrupt)
 # Hyperparameter sampling function
 def sample_hparams(trial: optuna.Trial) -> dict:
     return {
-        "lr": trial.suggest_float("lr", 1e-5, 5e-5, log=True),
-        "batch_size": trial.suggest_categorical("batch_size", [8, 16, 32]),
-        "weight_decay": trial.suggest_float("weight_decay", 0.0, 0.1),
+        "lr": trial.suggest_float("lr", 1e-6, 5e-5, log=True),
+        "batch_size": trial.suggest_categorical("batch_size", [8]),
+        "weight_decay": trial.suggest_categorical(
+            "weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 3e-2, 1e-1]
+        ),
         "warmup_ratio": trial.suggest_float("warmup_ratio", 0.0, 0.2),
-        "dropout": trial.suggest_float("dropout", 0.2, 0.4),
+        "dropout": trial.suggest_float("dropout", 0.1, 0.4),
     }
 
 
@@ -61,18 +61,20 @@ def objective(
     hparams = sample_hparams(trial)
     hparams = hparams | fixed_hparams  # Merge sampled hyperparameters with fixed ones
 
-    console.rule(f"Trial {trial.number}")
+    console.rule(f"Trial {trial.number}", style="bold cyan")
 
     # Train the model with the current set of hyperparameters and get the fold metrics
-    fold_metrics, _ = train_lodo(df, model_name, hparams, False, None, False, trial)
+    fold_metrics, _ = train_lodo(
+        df=df,
+        model_name=model_name,
+        hparams=hparams,
+        val=True,
+        model_output_dir=None,
+        trial=trial,
+    )
 
     # Compute the deciding metric (average macro F1 across all debates) for this trial
-    deciding_metric = sum(
-        [
-            metrics["validation_metrics"][metrics["best_epoch"] - 1]["macro"]["f1"]
-            for metrics in fold_metrics
-        ]
-    ) / len(fold_metrics)
+    deciding_metric = fold_metrics["overall"]["validation"]["macro"]["f1"]
 
     # Store the trial results in the global study_trials dictionary
     study_trials[trial.number] = {
@@ -90,6 +92,7 @@ def objective(
         progress.update(progress_task_trials, advance=1)
 
     return deciding_metric
+
 
 # ------------------------------------------
 # Main functions to run hyperparameter tuning
@@ -112,7 +115,7 @@ def parse_args() -> argparse.Namespace:
         help="Number of trials for hyperparameter tuning",
     )
     parser.add_argument(
-        "--num_epochs", type=int, default=8, help="Number of epochs for training"
+        "--num_epochs", type=int, default=15, help="Number of epochs for training"
     )
     parser.add_argument(
         "--use_crf",
@@ -128,7 +131,7 @@ def parse_args() -> argparse.Namespace:
 def main():
     set_random_seed(RANDOM_SEED)
     args = parse_args()
-    study_name = f"study_{args.input_file.name.split('.')[0].split('_')[0]}_{args.model_name.split("/")[-1]}_{datetime_now}"
+    study_name = f"study_{args.input_file.split('/')[-1].split('.')[0].split('_')[0]}_{args.model_name.split('/')[-1]}_{datetime_now}"
 
     # Create a new Optuna study for hyperparameter tuning
     study = optuna.create_study(
@@ -139,6 +142,7 @@ def main():
     )
 
     fixed_hparams = {
+        "num_epochs": args.num_epochs,
         "use_crf": True,
         "debate_alpha": DEBATE_TEMPERED_SAMPLING_ALPHA,
         "bio_alpha": BIO_TEMPERED_SAMPLING_ALPHA,
@@ -150,7 +154,7 @@ def main():
 
     # Create output directory for the study results
     study_output_path = script_dir / "studies" / f"{study_name}.json"
-    os.makedirs(study_output_path.parent, exist_ok=True, parents=True)
+    os.makedirs(study_output_path.parent, exist_ok=True)
 
     df = pd.read_csv(args.input_file)
     console.print(f"Loaded {len(df)} rows from {args.input_file}")
@@ -178,11 +182,19 @@ def main():
     progress.remove_task(progress_task_trials)
     progress.stop()
 
+    with open(study_output_path, "w") as f:
+        json.dump(
+            {"best_trial": study.best_trial.params, "trials": study_trials}, f, indent=4
+        )
+
     console.rule(f"Study Results")
     console.print(f"Best trial number: {study.best_trial.number}")
     console.print(f"Best trial value (average macro F1): {study.best_trial.value:.4f}")
     console.print("Best hyperparameters:")
-    [console.print(f"‣ {key}: {value}") for key, value in study.best_trial.params.items()]
+    [
+        console.print(f"‣ {key}: {value}")
+        for key, value in study.best_trial.params.items()
+    ]
 
     del study  # Free up memory
 

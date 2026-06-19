@@ -28,7 +28,11 @@ from torchcrf import CRF
 from optuna.trial import Trial
 from optuna.exceptions import TrialPruned
 
-from plot import plot_metric_curves, plot_train_loss_curve, plot_train_val_loss_curves
+from plot import (
+    plot_validation_metric_curves,
+    plot_train_loss_curve,
+    plot_train_val_loss_curves,
+)
 from plot_cm import compute_metrics_span_level, plot_confusion_matrix
 from utils import (
     BIO_TEMPERED_SAMPLING_ALPHA,
@@ -295,8 +299,10 @@ class WTCLModel(nn.Module):
         )
         # Apply dropout
         dropout_output = self.dropout(transformer_output.last_hidden_state)
+        del transformer_output
         # Compute logits
         logits = self.fc(dropout_output)
+        del dropout_output
         # Add emission bias to logits for CRF
         logits = logits + self.emission_bias
 
@@ -328,7 +334,7 @@ class WTCLModel(nn.Module):
 
             # Get predictions by taking the argmax of logits for non-CRF case
             result["predictions"] = torch.argmax(logits, dim=-1).cpu().tolist()
-
+        del logits
         return result
 
 
@@ -606,16 +612,22 @@ def train(
             loss = outputs["loss"]
             loss.backward()
 
-            optimizer.step()
-            scheduler.step()
-
             total_sequences += batch_size
             total_training_loss += loss.item() * batch_size
+            del loss, outputs, input_ids, attention_mask, labels
+
+            optimizer.step()
+            scheduler.step()
 
             progress.advance(progress_task_batches)
         progress.remove_task(progress_task_batches)
         training_loss = total_training_loss / total_sequences
         model_results["training_loss"].append(training_loss)
+
+        # Debug learned CRF transition parameters with priors
+        """ assert "crf.transitions" in [name for name, _ in model.named_parameters()]
+        console.print("Learned CRF transition parameters (with priors):")
+        console.print(model.crf.transitions.clone().detach().cpu().numpy()) """
 
         if val_loader is not None:
             preds, labels, val_loss = evaluate(model, val_loader, get_device())
@@ -644,13 +656,13 @@ def train(
                 f"░░ Epoch {epoch}: "
                 f"TL={training_loss:.2f}, "
                 f"VL={val_loss:.2f}, "
-                f"M-F1={validation_metrics['macro']['f1']:.3f}, "
-                f"B-F1={validation_metrics['B']['f1']:.3f} "
-                f"I-F1={validation_metrics['I']['f1']:.3f} "
-                # f"m-F1={validation_metrics['micro']['f1']:.3f}, "
-                f"A={validation_metrics['macro']['accuracy']:.3f}, "
-                f"P={validation_metrics['macro']['precision']:.3f}, "
-                f"R={validation_metrics['macro']['recall']:.3f}"
+                f"M-F1={validation_metrics['macro']['f1']:.1%}, "
+                f"B-F1={validation_metrics['B']['f1']:.1%} "
+                f"I-F1={validation_metrics['I']['f1']:.1%} "
+                # f"m-F1={validation_metrics['micro']['f1']:.1%}, "
+                f"A={validation_metrics['macro']['accuracy']:.1%}, "
+                f"P={validation_metrics['macro']['precision']:.1%}, "
+                f"R={validation_metrics['macro']['recall']:.1%}"
                 f"{('\t' + '[magenta]★[/magenta]') if epoch == best_epoch else ''}"
             )
             if epochs_no_improve >= PATIENCE:
@@ -659,10 +671,10 @@ def train(
                 )
                 break
         else:
-            console.print(f"░░ Epoch {epoch}: TL={training_loss:.3f}")
+            console.print(f"░░ Epoch {epoch}: TL={training_loss:.1%}")
         progress.advance(progress_task_epochs)
+        progress.refresh()
         gc.collect()
-        torch.cuda.empty_cache()
     progress.remove_task(progress_task_epochs)
     return model_results, best_model_state
 
@@ -823,6 +835,12 @@ def train_lodo(
         model_results["test_metrics"] = test_metrics
         results[test_debate] = model_results
 
+        # Store the best validation metrics for this debate in the results dictionary
+        if val:
+            model_results["best_validation_metrics"] = model_results[
+                "validation_metrics"
+            ][model_results["best_epoch"] - 1]
+
         # Compute span-level metrics for the test split
         span_metrics = compute_metrics_span_level({"preds": preds, "labels": labels})
         model_results["test_metrics"]["span"] = span_metrics
@@ -830,13 +848,13 @@ def train_lodo(
         # Print test metrics for the current debate
         console.print(
             f"Test | "
-            f"M-F1={test_metrics['macro']['f1']:.3f}, "
-            f"B-F1={test_metrics['B']['f1']:.3f}, "
-            f"I-F1={test_metrics['I']['f1']:.3f}, "
-            f"S-F1={span_metrics['f1']:.3f}"
-            f"A={test_metrics['macro']['accuracy']:.3f}, "
-            f"P={test_metrics['macro']['precision']:.3f}, "
-            f"R={test_metrics['macro']['recall']:.3f}, "
+            f"M-F1={test_metrics['macro']['f1']:.1%}, "
+            f"B-F1={test_metrics['B']['f1']:.1%}, "
+            f"I-F1={test_metrics['I']['f1']:.1%}, "
+            f"S-F1={span_metrics['f1']:.1%}, "
+            f"A={test_metrics['macro']['accuracy']:.1%}, "
+            f"P={test_metrics['macro']['precision']:.1%}, "
+            f"R={test_metrics['macro']['recall']:.1%}"
         )
 
         # Report to Optuna trial if provided
@@ -877,7 +895,7 @@ def train_lodo(
                 indent=4,
             )
 
-    results["overall"] = {}
+    results["overall"] = {"validation": {}, "test": {}}
 
     # Compile best epochs and compute median best epoch across debates
     results["overall"]["best_epochs"] = [
@@ -889,15 +907,30 @@ def train_lodo(
 
     # Compute average metrics across debates for each label and metric
     for label in ["macro", "micro", "B", "I", "O"]:
-        results["overall"][label] = {}
+        # Initialize overall metrics dictionaries for each label
+        results["overall"]["test"][label] = {}
+        if val:
+            results["overall"]["validation"][label] = {}
+
         for metric in ["f1", "precision", "recall", "accuracy"]:
-            results["overall"][label][metric] = np.mean(
+            # Compute average test metric across debates for the current label and metric
+            results["overall"]["test"][label][metric] = np.mean(
                 [
                     results[debate]["test_metrics"][label][metric]
                     for debate in all_debates
                 ]
             )
-    results["overall"]["span"] = compute_metrics_span_level(
+
+            # Compute average validation metric across debates for the
+            # current label and metric if validation was performed
+            if val:
+                results["overall"]["validation"][label][metric] = np.mean(
+                    [
+                        results[debate]["best_validation_metrics"][label][metric]
+                        for debate in all_debates
+                    ]
+                )
+    results["overall"]["test"]["span"] = compute_metrics_span_level(
         {"preds": all_preds, "labels": all_labels}
     )
 
@@ -925,27 +958,40 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
         if debate == "overall":
             continue
         console.print(
-            f"Debate '{debate}': M-F1 = {metrics['test_metrics']['macro']['f1']:.3f}"
+            f"Debate '{debate}': M-F1 = {metrics['test_metrics']['macro']['f1']:.1%}"
         )
 
-    # Print overall results
+    # Print overall token-level test metrics
     console.print(
-        f"Overall metrics: "
-        f"M-F1={results['overall']['macro']['f1']:.3f}, "
-        f"B-F1={results['overall']['B']['f1']:.3f}, "
-        f"I-F1={results['overall']['I']['f1']:.3f}, "
-        f"A={results['overall']['macro']['accuracy']:.3f}, "
-        f"P={results['overall']['macro']['precision']:.3f}, "
-        f"R={results['overall']['macro']['recall']:.3f}"
+        f"Overall test metrics: "
+        f"M-F1={results['overall']['test']['macro']['f1']:.1%}, "
+        f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
+        f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
+        f"A={results['overall']['test']['macro']['accuracy']:.1%}, "
+        f"P={results['overall']['test']['macro']['precision']:.1%}, "
+        f"R={results['overall']['test']['macro']['recall']:.1%}"
     )
 
+    # Print overall span-level test metrics
     console.print(
-        f"\nSpan-level metrics: "
-        f"F1={results['overall']['span']['f1']:.3f}, "
-        f"P={results['overall']['span']['precision']:.3f}, "
-        f"R={results['overall']['span']['recall']:.3f}, "
-        f"A={results['overall']['span']['accuracy']:.3f}"
+        f"\nSpan-level test metrics: "
+        f"F1={results['overall']['test']['span']['f1']:.1%}, "
+        f"P={results['overall']['test']['span']['precision']:.1%}, "
+        f"R={results['overall']['test']['span']['recall']:.1%}, "
+        f"A={results['overall']['test']['span']['accuracy']:.1%}"
     )
+
+    # Print overall token-level validation metrics
+    if results["overall"].get("validation") is not None:
+        console.print(
+            f"\nOverall validation metrics: "
+            f"M-F1={results['overall']['validation']['macro']['f1']:.1%}, "
+            f"B-F1={results['overall']['validation']['B']['f1']:.1%}, "
+            f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
+            f"A={results['overall']['validation']['macro']['accuracy']:.1%}, "
+            f"P={results['overall']['validation']['macro']['precision']:.1%}, "
+            f"R={results['overall']['validation']['macro']['recall']:.1%}"
+        )
 
     if all(
         [
@@ -957,7 +1003,7 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
     ):
         # Plot validation metrics if validation was performed
         plot_train_val_loss_curves(results, figures_dir)
-        plot_metric_curves(results, figures_dir)
+        plot_validation_metric_curves(results, figures_dir)
     else:
         # Plot training loss curve
         plot_train_loss_curve(results, figures_dir)
@@ -965,7 +1011,7 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
     # Plot confusion matrix
     plot_confusion_matrix(all_preds_labels, figures_dir)
 
-    console.print(f"\nPlots saved to {figures_dir}")
+    console.print(f"\nPlots saved to '{figures_dir}'")
 
 
 # -------------------------------

@@ -1781,7 +1781,7 @@ def analyze(
         for _, row in speaker_metrics.iterrows():
             print(
                 f"  {row['speaker']}: "
-                f"spans/turn={row['spans_per_turn']:.3f}, "
+                f"spans/turn={row['spans_per_turn']:.1%}, "
                 f"span-chars/turn-chars={row['span_chars_over_turn_chars_pct']:.2f}%, "
                 f"span-words/turn-words={row['span_words_over_turn_words_pct']:.2f}%"
             )
