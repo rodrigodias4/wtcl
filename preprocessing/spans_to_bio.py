@@ -1,10 +1,10 @@
 from pathlib import Path
 
 import pandas as pd
-from tqdm import tqdm
 from transformers import AutoTokenizer
 import json
 import argparse
+from utils import console, progress
 
 MODEL = "distilroberta-base"
 
@@ -177,7 +177,7 @@ def chunk_bio(
     assert all(
         len(c["input_ids"]) == len(c["labels"]) for c in chunks
     ), "Mismatch between input_ids and labels lengths in chunks."
-    tqdm.write(
+    console.print(
         f"Row {id}: Tokenized into {len(tokens)} tokens, {len(spans)} spans, resulting in {len(chunks)} chunks with lengths {', '.join(str(len(c['input_ids'])) for c in chunks)}."
     )
     return chunks
@@ -209,9 +209,9 @@ def main():
     output_file = (
         f"{args.input_file.split('.')[0]}_bio_{args.model_name.split('/')[-1]}.csv"
     )
-    print(f"Processing file: {args.input_file}")
-    print(f"Using model: {args.model_name}")
-    print(f"Output will be saved to: {output_file}")
+    console.print(f"Processing file: {args.input_file}")
+    console.print(f"Using model: {args.model_name}")
+    console.print(f"Output will be saved to: {output_file}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, model_max_length=512)
 
@@ -222,8 +222,8 @@ def main():
     overlapping_chunks = 0
 
     if args.strategy == "chunk":
-        for index, row in tqdm(
-            data.iterrows(), total=len(data), desc="Converting spans to BIO"
+        for index, row in progress.track(
+            data.iterrows(), total=len(data), description="Converting spans to BIO"
         ):
             text = row["text"]
             chunks = chunk_bio(
@@ -253,10 +253,10 @@ def main():
                 )
 
             all_rows.extend(new_rows)
-        print(f"Number of overlapping chunks: {overlapping_chunks}")
+        console.print(f"Number of overlapping chunks: {overlapping_chunks}")
     elif args.strategy == "truncate":
-        for index, row in tqdm(
-            data.iterrows(), total=len(data), desc="Converting spans to BIO"
+        for index, row in progress.track(
+            data.iterrows(), total=len(data), description="Converting spans to BIO"
         ):
             row_truncated = truncate(
                 id=row["id"],
@@ -277,7 +277,7 @@ def main():
                 }
             )
 
-    print(f"Processed {len(data)} rows into {len(all_rows)} chunks.")
+    console.print(f"Processed {len(data)} rows into {len(all_rows)} chunks.")
 
     pd.DataFrame(all_rows).sort_values(
         ["id", "chunk_id"] if "chunk_id" in all_rows[0] else ["id"]

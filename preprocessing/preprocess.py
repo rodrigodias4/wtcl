@@ -10,12 +10,15 @@ It reports how many rows are removed at each stage and writes the filtered CSV.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import math
 import re
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
 import pandas as pd
+
+from utils import console
 
 WORD_RE = re.compile(r"\S+")
 
@@ -132,9 +135,8 @@ def moderator_turns(
 
     filtered = df.loc[keep_stage1].copy()
 
-    
-
     return filtered, removed
+
 
 def min_words(
     df: pd.DataFrame,
@@ -146,10 +148,26 @@ def min_words(
     """Filter turns by minimum word count."""
     df_min_words = df.copy()
     for i, row in df.iterrows():
-        if _word_count(row[text_col]) < min_words and row["spans"] == "[]":
-            #print(f"Removing row {row["id"]} from {row[debate_col]} with text: {row[text_col]!r} (word count: {_word_count(row[text_col])}) (spans: {row['spans']})")
+        if (
+            _word_count(row[text_col]) < min_words
+            and row["spans"] == "[]"
+            and row[text_col].endswith("-")
+        ):
+            console.print(
+                f"Removing row {row["id"]} from {row[debate_col]} with text: {row[text_col]!r} (word count: {_word_count(row[text_col])}) (spans: {row['spans']})"
+            )
             df_min_words = df_min_words.drop(i)
     return df_min_words, len(df) - len(df_min_words)
+
+
+def remove_speech_markers(df: pd.DataFrame, text_col: str) -> pd.DataFrame:
+    df_cleaned = df.copy()
+    for i, row in df.iterrows():
+        text = row[text_col]
+        text = re.sub(r"\[.*\]", "", text)  # Remove content in square brackets
+        text = re.sub("\s\s+", " ", text)  # Replace multiple spaces with a single space
+        row[text_col] = text.strip()
+    return df_cleaned
 
 
 def clip_turns_per_debate(
@@ -169,9 +187,7 @@ def clip_turns_per_debate(
 
         nonlocal clipped_removed
         clipped_removed += len(group) - max_turns_per_debate
-        return group.sample(
-            n=min(len(group), max_turns_per_debate), random_state=42
-        )
+        return group.sample(n=min(len(group), max_turns_per_debate), random_state=42)
 
     return (
         df.groupby(debate_col, as_index=True).apply(clip_group).reset_index(level=0),
@@ -189,37 +205,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         out = args.input_csv.with_suffix(".filtered.csv")
 
     df = pd.read_csv(args.input_csv)
-    print(f"Loaded {len(df)} rows from {args.input_csv}")
-    
+    console.print(f"Loaded {len(df)} rows from {args.input_csv}")
+
     preprocessed, removed = moderator_turns(
         df,
         debate_col=args.debate_col,
         speaker_col=args.speaker_col,
         text_col=args.text_col,
     )
-    print(f"Removed {removed} moderator turns")
-    
-    """ preprocessed, removed = min_words(
+    console.print(f"Removed {removed} moderator turns")
+
+    preprocessed = remove_speech_markers(preprocessed, text_col=args.text_col)
+
+    preprocessed, removed = min_words(
         preprocessed,
         debate_col=args.debate_col,
         speaker_col=args.speaker_col,
         text_col=args.text_col,
         min_words=args.min_words,
     )
-    print(f"Removed {removed} turns with fewer than {args.min_words} words") """
+    console.print(f"Removed {removed} turns with fewer than {args.min_words} words")
 
     """ preprocessed, removed = clip_turns_per_debate(
         filtered,
         debate_col=args.debate_col,
         max_turns_per_debate=200,
     )
-    print(f"Clipped {removed} rows")"""
+    console.print(f"Clipped {removed} rows")"""
 
     out.parent.mkdir(parents=True, exist_ok=True)
     preprocessed.sort_values("id").to_csv(out, index=False)
 
-    print(f"Kept {len(preprocessed)} rows")
-    print(f"Wrote {out}")
+    console.print(f"Kept {len(preprocessed)} rows")
+    console.print(f"Wrote {out}")
     return 0
 
 
