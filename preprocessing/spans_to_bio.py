@@ -80,6 +80,8 @@ def chunk_bio(
             for idx in matching_tokens[1:]:
                 labels[idx] = "I"
 
+    labels = list(zip(tokens, labels)) if keep_token else labels
+
     if len(input_ids) <= max_length:
         return [{"input_ids": input_ids, "labels": labels}]
 

@@ -355,8 +355,8 @@ def get_tokenizer(model_name: str) -> AutoTokenizer:
 
 
 def encode(
-    text: torch.Tensor,
-    labels: torch.Tensor,
+    text: str,
+    labels: list,
     tokenizer: AutoTokenizer,
     max_length: int,
 ) -> dict:
@@ -463,8 +463,9 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
         # remove padding labels
         valid_l = [x for x in label if x != -100]
 
-        # align lengths safely
-        pred = pred[: len(valid_l)]
+        assert len(pred) == len(
+            valid_l
+        ), "Predictions and labels must be the same length after removing padding"
 
         flat_preds.extend(pred)
         flat_labels.extend(valid_l)
@@ -493,23 +494,25 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
             "support": int(np.sum(labels == c)),
         }
 
+    class_metrics = list(metrics.values())
+
     # Compute macro and micro metrics
     metrics["macro"] = {
-        "f1": np.mean([m["f1"] for m in metrics.values()]),
-        "precision": np.mean([m["precision"] for m in metrics.values()]),
-        "recall": np.mean([m["recall"] for m in metrics.values()]),
-        "accuracy": np.mean([m["accuracy"] for m in metrics.values()]),
-        "support": int(np.sum([m["support"] for m in metrics.values()])),
+        "f1": np.mean([m["f1"] for m in class_metrics]),
+        "precision": np.mean([m["precision"] for m in class_metrics]),
+        "recall": np.mean([m["recall"] for m in class_metrics]),
+        "accuracy": np.mean([m["accuracy"] for m in class_metrics]),
+        "support": int(np.sum([m["support"] for m in class_metrics])),
     }
     metrics["micro"] = {
-        "f1": compute_micro_f1(list(metrics.values())),
-        "precision": np.sum([m["precision"] * m["support"] for m in metrics.values()])
-        / np.sum([m["support"] for m in metrics.values()]),
-        "recall": np.sum([m["recall"] * m["support"] for m in metrics.values()])
-        / np.sum([m["support"] for m in metrics.values()]),
-        "accuracy": np.sum([m["accuracy"] * m["support"] for m in metrics.values()])
-        / np.sum([m["support"] for m in metrics.values()]),
-        "support": int(np.sum([m["support"] for m in metrics.values()])),
+        "f1": compute_micro_f1(class_metrics),
+        "precision": np.sum([m["precision"] * m["support"] for m in class_metrics])
+        / np.sum([m["support"] for m in class_metrics]),
+        "recall": np.sum([m["recall"] * m["support"] for m in class_metrics])
+        / np.sum([m["support"] for m in class_metrics]),
+        "accuracy": np.sum([m["accuracy"] * m["support"] for m in class_metrics])
+        / np.sum([m["support"] for m in class_metrics]),
+        "support": int(np.sum([m["support"] for m in class_metrics])),
     }
 
     return metrics
@@ -640,6 +643,9 @@ def train(
             ) """
             model_results["validation_loss"].append(val_loss)
             validation_metrics = compute_metrics_token_level(preds, labels)
+            validation_metrics["span"] = compute_metrics_span_level(
+                {"preds": preds, "labels": labels}
+            )
             model_results["validation_metrics"].append(validation_metrics)
 
             # Early stopping
@@ -647,8 +653,8 @@ def train(
                 best_macro_f1 = validation_metrics["macro"]["f1"]
                 epochs_no_improve = 0
                 best_model_state = deepcopy(model.state_dict())
-                model_results["best_epoch"] = best_epoch
                 best_epoch = epoch
+                model_results["best_epoch"] = best_epoch
             else:
                 epochs_no_improve += 1
 
@@ -659,6 +665,7 @@ def train(
                 f"M-F1={validation_metrics['macro']['f1']:.1%}, "
                 f"B-F1={validation_metrics['B']['f1']:.1%} "
                 f"I-F1={validation_metrics['I']['f1']:.1%} "
+                f"S-F1={validation_metrics['span']['f1']:.1%} "
                 # f"m-F1={validation_metrics['micro']['f1']:.1%}, "
                 f"A={validation_metrics['macro']['accuracy']:.1%}, "
                 f"P={validation_metrics['macro']['precision']:.1%}, "
@@ -942,6 +949,40 @@ def train_lodo(
 # ---------------------------------
 
 
+def print_overall_results(results: dict) -> None:
+    # Print overall token-level test metrics
+    console.print(
+        f"\nOverall test metrics: "
+        f"M-F1={results['overall']['test']['macro']['f1']:.1%}, "
+        f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
+        f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
+        f"A={results['overall']['test']['macro']['accuracy']:.1%}, "
+        f"P={results['overall']['test']['macro']['precision']:.1%}, "
+        f"R={results['overall']['test']['macro']['recall']:.1%}"
+    )
+
+    # Print overall span-level test metrics
+    console.print(
+        f"Overall span-level test metrics: "
+        f"F1={results['overall']['test']['span']['f1']:.1%}, "
+        f"P={results['overall']['test']['span']['precision']:.1%}, "
+        f"R={results['overall']['test']['span']['recall']:.1%}, "
+        f"A={results['overall']['test']['span']['accuracy']:.1%}"
+    )
+
+    # Print overall token-level validation metrics
+    if results["overall"].get("validation") is not None:
+        console.print(
+            f"Overall validation metrics: "
+            f"M-F1={results['overall']['validation']['macro']['f1']:.1%}, "
+            f"B-F1={results['overall']['validation']['B']['f1']:.1%}, "
+            f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
+            f"A={results['overall']['validation']['macro']['accuracy']:.1%}, "
+            f"P={results['overall']['validation']['macro']['precision']:.1%}, "
+            f"R={results['overall']['validation']['macro']['recall']:.1%}"
+        )
+
+
 def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> None:
     console.rule("Final Results and Plots")
     # Save results to JSON
@@ -961,37 +1002,7 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
             f"Debate '{debate}': M-F1 = {metrics['test_metrics']['macro']['f1']:.1%}"
         )
 
-    # Print overall token-level test metrics
-    console.print(
-        f"Overall test metrics: "
-        f"M-F1={results['overall']['test']['macro']['f1']:.1%}, "
-        f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
-        f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
-        f"A={results['overall']['test']['macro']['accuracy']:.1%}, "
-        f"P={results['overall']['test']['macro']['precision']:.1%}, "
-        f"R={results['overall']['test']['macro']['recall']:.1%}"
-    )
-
-    # Print overall span-level test metrics
-    console.print(
-        f"\nSpan-level test metrics: "
-        f"F1={results['overall']['test']['span']['f1']:.1%}, "
-        f"P={results['overall']['test']['span']['precision']:.1%}, "
-        f"R={results['overall']['test']['span']['recall']:.1%}, "
-        f"A={results['overall']['test']['span']['accuracy']:.1%}"
-    )
-
-    # Print overall token-level validation metrics
-    if results["overall"].get("validation") is not None:
-        console.print(
-            f"\nOverall validation metrics: "
-            f"M-F1={results['overall']['validation']['macro']['f1']:.1%}, "
-            f"B-F1={results['overall']['validation']['B']['f1']:.1%}, "
-            f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
-            f"A={results['overall']['validation']['macro']['accuracy']:.1%}, "
-            f"P={results['overall']['validation']['macro']['precision']:.1%}, "
-            f"R={results['overall']['validation']['macro']['recall']:.1%}"
-        )
+    print_overall_results(results)
 
     if all(
         [

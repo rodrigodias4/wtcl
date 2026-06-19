@@ -58,7 +58,9 @@ def get_validation_debate(df: pd.DataFrame, debates: list[str]) -> str:
 
         for index, row in debate_data.iterrows():
             labels = eval(row["labels"])
-            n_positive_tokens += sum(label2id[label] > 0 for label in labels)
+            n_positive_tokens += sum(
+                label2id[label] > 0 for label in labels if label in label2id
+            )
             n_tokens += len(labels)
 
         debate_ratios[debate] = n_positive_tokens / n_tokens if n_tokens > 0 else 0
@@ -146,7 +148,7 @@ def create_progress_bar(console) -> Progress:
         TimeRemainingColumn(),
         transient=True,
         console=console,
-        speed_estimate_period=60*30,
+        speed_estimate_period=60 * 30,
     )
     return progress
 

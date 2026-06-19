@@ -3,7 +3,6 @@ from datetime import datetime
 import gc
 import json
 import os
-from pathlib import Path
 import signal
 
 import pandas as pd
@@ -12,7 +11,7 @@ import optuna
 
 from train import (
     RANDOM_SEED,
-    get_model_output_dir,
+    print_overall_results,
     set_random_seed,
     train_lodo,
     script_dir,
@@ -28,6 +27,7 @@ from utils import (
 )
 from rich.progress import TaskID
 
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 datetime_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 study_trials = {}
 
@@ -51,6 +51,13 @@ def sample_hparams(trial: optuna.Trial) -> dict:
     }
 
 
+def callback(study: optuna.Study, trial: optuna.Trial):
+    console.print(f"\nTrial {trial.number} finished with value: {trial.value:.1%}")
+    console.print(
+        f"Best trial so far: {study.best_trial.number} with value: {study.best_trial.value:.1%}"
+    )
+
+
 def objective(
     trial: optuna.Trial,
     df: pd.DataFrame,
@@ -64,7 +71,7 @@ def objective(
     console.rule(f"Trial {trial.number}", style="bold cyan")
 
     # Train the model with the current set of hyperparameters and get the fold metrics
-    fold_metrics, _ = train_lodo(
+    results, _ = train_lodo(
         df=df,
         model_name=model_name,
         hparams=hparams,
@@ -73,13 +80,15 @@ def objective(
         trial=trial,
     )
 
+    print_overall_results(results)
+
     # Compute the deciding metric (average macro F1 across all debates) for this trial
-    deciding_metric = fold_metrics["overall"]["validation"]["macro"]["f1"]
+    deciding_metric = results["overall"]["validation"]["macro"]["f1"]
 
     # Store the trial results in the global study_trials dictionary
     study_trials[trial.number] = {
         "hparams": hparams,
-        "fold_metrics": fold_metrics,
+        "results": results,
         "deciding_metric": deciding_metric,
     }
 
@@ -175,7 +184,8 @@ def main():
             progress_task_trials=progress_task_trials,
         ),
         n_trials=args.num_trials,
-        show_progress_bar=True,
+        show_progress_bar=False,
+        callbacks=[callback],
     )
 
     # Stop the progress bar for hyperparameter tuning trials
