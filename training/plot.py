@@ -14,7 +14,7 @@ script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 
 def plot_validation_metric_curve_single(
-    results: dict, label: str, metric: str, output_dir: Path
+    results: dict, label: str, metric: str, output_path: Path
 ):
     plt.figure(figsize=(10, 6))
     max_epochs = 0
@@ -41,6 +41,7 @@ def plot_validation_metric_curve_single(
             marker=marker,
             mec="white",
             linestyle="-",
+            label="$M_{%s}$" % model_name[0:4],
         )
 
     results_at_epoch = [[] for _ in range(max_epochs)]
@@ -100,7 +101,7 @@ def plot_validation_metric_curve_single(
         ha="right",
     )
 
-    plt.legend()
+    plt.legend(loc="lower right")
     plt.xlabel("Epoch")
     plt.xticks(
         [
@@ -118,17 +119,19 @@ def plot_validation_metric_curve_single(
     plt.title(f"Validation {label.capitalize()}-{metric.capitalize()} per Epoch")
 
     plt.tight_layout()
-    plt.savefig(output_dir / f"validation_{label}_{metric}.png", dpi=300)
+    plt.savefig(output_path, dpi=300)
 
 
 def plot_validation_metric_curves(results: dict, output_dir: Path):
     console.print("Plotting validation metrics curves...")
-    for label in ["macro", "B", "I"]:
+    for label in ["macro", "span", "B", "I"]:
         for metric in ["f1", "accuracy", "precision", "recall"]:
-            plot_validation_metric_curve_single(results, label, metric, output_dir)
+            plot_validation_metric_curve_single(
+                results, label, metric, output_dir / f"validation_{label}_{metric}.png"
+            )
 
 
-def plot_train_val_loss_curves(results, output_dir: Path):
+def plot_train_val_loss_curves(results, output_path: Path):
     console.print("Plotting training and validation loss curves...")
     train_color = "tab:blue"
     val_color = "tab:orange"
@@ -181,10 +184,10 @@ def plot_train_val_loss_curves(results, output_dir: Path):
 
     plt.legend(handles=[train_line, val_line])
     plt.tight_layout()
-    plt.savefig(output_dir / "training_validation_loss_curves.png", dpi=300)
+    plt.savefig(output_path, dpi=300)
 
 
-def plot_train_loss_curve(results, output_dir: Path):
+def plot_train_loss_curve(results, output_path: Path):
     console.print("Plotting training loss curve...")
     plt.figure(figsize=(10, 6))
     for i, (model_name, metrics) in enumerate(results.items()):
@@ -214,7 +217,7 @@ def plot_train_loss_curve(results, output_dir: Path):
     plt.grid(alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(output_dir / "training_loss_curve.png", dpi=300)
+    plt.savefig(output_path, dpi=300)
     plt.close()
 
 
@@ -242,8 +245,13 @@ def main():
     args = parse_args()
 
     if not args.results_file.endswith("results.json"):
-        console.print("Error: Results file must be a JSON file named 'results.json'")
-        return
+        if Path(args.results_file) / "results.json":
+            args.results_file = str(Path(args.results_file) / "results.json")
+        else:
+            console.print(
+                "Error: Results file must be a JSON file named 'results.json'"
+            )
+            return
 
     with open(args.results_file, "r") as f:
         results = json.load(f)
@@ -252,9 +260,11 @@ def main():
     figures_dir.mkdir(exist_ok=True)
 
     if args.type in ["train_loss", "all"]:
-        plot_train_loss_curve(results, figures_dir)
+        plot_train_loss_curve(results, figures_dir / "training_loss_curve.png")
     if args.type in ["val_loss", "all"]:
-        plot_train_val_loss_curves(results, figures_dir)
+        plot_train_val_loss_curves(
+            results, figures_dir / "training_validation_loss_curves.png"
+        )
     if args.type in ["metrics", "all"]:
         plot_validation_metric_curves(results, figures_dir)
 

@@ -14,29 +14,29 @@ from seqeval.metrics import accuracy_score, classification_report
 
 
 def plot_confusion_matrix(
-    all_preds_labels: dict, output_dir: Path, normalize: bool = True
+    all_preds, all_labels, output_path: Path, normalize: bool = True
 ):
+    all_preds = deepcopy(all_preds)
+    all_labels = deepcopy(all_labels)
     console.print("Plotting confusion matrix...")
-    y_true_seqs = deepcopy(all_preds_labels["labels"])
-    y_pred_seqs = deepcopy(all_preds_labels["preds"])
     y_true = []
     y_pred = []
 
-    assert len(y_true_seqs) == len(
-        y_pred_seqs
+    assert len(all_labels) == len(
+        all_preds
     ), "Number of sequences in predictions and labels must be the same."
-    for i in range(len(y_pred_seqs)):
-        y_true_seqs[i] = y_true_seqs[i][
-            : len(y_pred_seqs[i])
+    for i in range(len(all_preds)):
+        all_labels[i] = all_labels[i][
+            : len(all_preds[i])
         ]  # Truncate labels to match the length of predictions (remove padding)
-        y_true_seqs[i] = [
-            id2label[label_id] for label_id in y_true_seqs[i]
+        all_labels[i] = [
+            id2label[label_id] for label_id in all_labels[i]
         ]  # Convert label IDs to label names
-        y_pred_seqs[i] = [
-            id2label[label_id] for label_id in y_pred_seqs[i]
+        all_preds[i] = [
+            id2label[label_id] for label_id in all_preds[i]
         ]  # Convert prediction IDs to label names
-        y_true.extend(y_true_seqs[i])
-        y_pred.extend(y_pred_seqs[i])
+        y_true.extend(all_labels[i])
+        y_pred.extend(all_preds[i])
 
     gc.collect()
 
@@ -59,15 +59,14 @@ def plot_confusion_matrix(
     plt.ylabel("True label")
     plt.title("BIO Confusion Matrix")
     plt.tight_layout()
-    plt.savefig(output_dir / "confusion_matrix.png", dpi=300)
+    plt.savefig(output_path, dpi=300)
     plt.close()
     gc.collect()
 
 
-def compute_metrics_span_level(all_preds_labels: dict) -> dict:
-    y_true_seqs = deepcopy(all_preds_labels["labels"])
-    y_pred_seqs = deepcopy(all_preds_labels["preds"])
-
+def compute_metrics_span_level(all_preds: list, all_labels: list) -> dict:
+    all_preds = deepcopy(all_preds)
+    all_labels = deepcopy(all_labels)
     id2label_seqeval = deepcopy(id2label)
 
     if len(label_list) == 3:
@@ -75,29 +74,31 @@ def compute_metrics_span_level(all_preds_labels: dict) -> dict:
         id2label_seqeval[label2id["B"]] = "B-CLAIM"
         id2label_seqeval[label2id["I"]] = "I-CLAIM"
 
-    assert len(y_true_seqs) == len(
-        y_pred_seqs
+    assert len(all_labels) == len(
+        all_preds
     ), "Number of sequences in predictions and labels must be the same."
-    for i in range(len(y_pred_seqs)):
-        y_true_seqs[i] = y_true_seqs[i][
-            : len(y_pred_seqs[i])
+    for i in range(len(all_preds)):
+        all_labels[i] = all_labels[i][
+            : len(all_preds[i])
         ]  # Truncate labels to match the length of predictions (remove padding)
-        y_true_seqs[i] = [
-            id2label_seqeval[label_id] for label_id in y_true_seqs[i]
+        all_labels[i] = [
+            id2label_seqeval[label_id] for label_id in all_labels[i]
         ]  # Convert label IDs to label names
-        y_pred_seqs[i] = [
-            id2label_seqeval[label_id] for label_id in y_pred_seqs[i]
+        all_preds[i] = [
+            id2label_seqeval[label_id] for label_id in all_preds[i]
         ]  # Convert prediction IDs to label names
 
     report = classification_report(
-        y_true_seqs, y_pred_seqs, output_dict=True, zero_division=0
+        all_labels, all_preds, output_dict=True, zero_division=0
     )
+    accuracy = accuracy_score(all_labels, all_preds)
+    del all_labels, all_preds, id2label_seqeval
     gc.collect()
     return {
         "f1": report["macro avg"]["f1-score"],
         "precision": report["macro avg"]["precision"],
         "recall": report["macro avg"]["recall"],
-        "accuracy": accuracy_score(y_true_seqs, y_pred_seqs),
+        "accuracy": accuracy,
     }
 
 
@@ -119,15 +120,23 @@ def main():
 
     figures_dir = Path(args.all_preds_labels_file).parent / "figures"
     figures_dir.mkdir(exist_ok=True)
+    test_or_val = "validation" if "validation" in args.all_preds_labels_file else "test"
 
-    plot_confusion_matrix(all_preds_labels, figures_dir, normalize=True)
-    span_metrics = compute_metrics_span_level(all_preds_labels)
+    plot_confusion_matrix(
+        all_preds_labels["preds"],
+        all_preds_labels["labels"],
+        figures_dir / f"{test_or_val}_confusion_matrix.png",
+        normalize=True,
+    )
+    span_metrics = compute_metrics_span_level(
+        all_preds_labels["preds"], all_preds_labels["labels"]
+    )
     console.print(
         f"Span metrics: "
-        f"F1={span_metrics['f1']:.1%}"
+        f"F1={span_metrics['f1']:.1%}, "
         f"A={span_metrics['accuracy']:.1%}, "
         f"P={span_metrics['precision']:.1%}, "
-        f"R={span_metrics['recall']:.1%}, "
+        f"R={span_metrics['recall']:.1%}"
     )
 
 

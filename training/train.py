@@ -592,6 +592,8 @@ def train(
     epochs_no_improve = 0
     best_epoch = 0
     best_model_state = None
+    validation_preds = []
+    validation_labels = []
 
     progress_task_epochs = progress.add_task("Training Epochs", total=epochs)
     for epoch in range(1, epochs + 1):
@@ -643,18 +645,23 @@ def train(
             ) """
             model_results["validation_loss"].append(val_loss)
             validation_metrics = compute_metrics_token_level(preds, labels)
-            validation_metrics["span"] = compute_metrics_span_level(
-                {"preds": preds, "labels": labels}
-            )
+            validation_metrics["span"] = compute_metrics_span_level(preds, labels)
             model_results["validation_metrics"].append(validation_metrics)
 
             # Early stopping
             if validation_metrics["macro"]["f1"] > best_macro_f1 + EARLY_STOPPING_DELTA:
+                # Save current best model state, epoch and macro F1 score
                 best_macro_f1 = validation_metrics["macro"]["f1"]
-                epochs_no_improve = 0
                 best_model_state = deepcopy(model.state_dict())
                 best_epoch = epoch
                 model_results["best_epoch"] = best_epoch
+
+                # Save validation predictions and labels for confusion matrix plotting
+                validation_preds = preds
+                validation_labels = labels
+
+                # Reset early stopping counter
+                epochs_no_improve = 0
             else:
                 epochs_no_improve += 1
 
@@ -683,7 +690,7 @@ def train(
         progress.refresh()
         gc.collect()
     progress.remove_task(progress_task_epochs)
-    return model_results, best_model_state
+    return model_results, best_model_state, validation_preds, validation_labels
 
 
 def train_lodo(
@@ -694,7 +701,7 @@ def train_lodo(
     model_output_dir: Path,
     save: bool = False,
     trial: Trial = None,
-) -> tuple[dict, dict]:
+) -> tuple[dict, list, list, list, list]:
     """
     Leave-one-debate-out training function.
     For each debate, we train a model on all other debates and evaluate on the left-out debate,
@@ -721,6 +728,8 @@ def train_lodo(
 
     all_test_preds = []
     all_test_labels = []
+    all_validation_preds = []
+    all_validation_labels = []
 
     if model_output_dir is not None:
         os.makedirs(model_output_dir / "folds", exist_ok=True)
@@ -810,7 +819,7 @@ def train_lodo(
         )
 
         # Train the model
-        model_results, best_model_state = train(
+        model_results, best_model_state, validation_preds, validation_labels = train(
             model,
             train_loader,
             optimizer,
@@ -842,14 +851,18 @@ def train_lodo(
         model_results["test_metrics"] = test_metrics
         results[test_debate] = model_results
 
-        # Store the best validation metrics for this debate in the results dictionary
         if val:
+            # Store the best validation metrics for this debate in the results dictionary
             model_results["best_validation_metrics"] = model_results[
                 "validation_metrics"
             ][model_results["best_epoch"] - 1]
 
+            # Store validation predictions and labels for confusion matrix plotting
+            all_validation_preds.extend(validation_preds)
+            all_validation_labels.extend(validation_labels)
+
         # Compute span-level metrics for the test split
-        span_metrics = compute_metrics_span_level({"preds": preds, "labels": labels})
+        span_metrics = compute_metrics_span_level(preds, labels)
         model_results["test_metrics"]["span"] = span_metrics
 
         # Print test metrics for the current debate
@@ -894,13 +907,21 @@ def train_lodo(
         progress.stop()
 
     if model_output_dir is not None:
-        with (model_output_dir / f"all_preds_labels.json").open("w") as f:
+        with (model_output_dir / f"test_preds_labels.json").open("w") as f:
             json.dump(
                 {"preds": all_test_preds, "labels": all_test_labels},
                 f,
                 ensure_ascii=False,
                 indent=4,
             )
+        if val:
+            with (model_output_dir / f"validation_preds_labels.json").open("w") as f:
+                json.dump(
+                    {"preds": all_validation_preds, "labels": all_validation_labels},
+                    f,
+                    ensure_ascii=False,
+                    indent=4,
+                )
 
     results["overall"] = {"validation": {}, "test": {}}
 
@@ -941,7 +962,13 @@ def train_lodo(
         {"preds": all_test_preds, "labels": all_test_labels}
     )
 
-    return results, {"preds": all_test_preds, "labels": all_test_labels}
+    return (
+        results,
+        all_test_preds,
+        all_test_labels,
+        all_validation_preds,
+        all_validation_labels,
+    )
 
 
 # ---------------------------------
@@ -984,7 +1011,14 @@ def print_overall_results(results: dict) -> None:
         )
 
 
-def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> None:
+def process_results(
+    results: dict,
+    output_dir: Path,
+    test_preds: list,
+    test_labels: list,
+    val_preds: list,
+    val_labels: list,
+) -> None:
     console.rule("Final Results and Plots")
     # Save results to JSON
     with (output_dir / "results.json").open("w") as f:
@@ -1005,23 +1039,31 @@ def process_results(results: dict, all_preds_labels: dict, output_dir: Path) -> 
 
     print_overall_results(results)
 
-    if all(
-        [
-            results[debate].get("validation_metrics") is not None
-            and len(results[debate]["validation_metrics"]) > 0
-            for debate in results
-            if debate != "overall"
-        ]
-    ):
-        # Plot validation metrics if validation was performed
-        plot_train_val_loss_curves(results, figures_dir)
+    if len(val_preds) > 0:
+        # Plot training and validation loss curves
+        plot_train_val_loss_curves(
+            results, figures_dir / "training_validation_loss_curves.png"
+        )
+        # Plot validation metrics
         plot_validation_metric_curves(results, figures_dir)
+        # Plot validation confusion matrix
+        plot_confusion_matrix(
+            val_preds,
+            val_labels,
+            figures_dir / "validation_confusion_matrix.png",
+            normalize=True,
+        )
     else:
         # Plot training loss curve
-        plot_train_loss_curve(results, figures_dir)
+        plot_train_loss_curve(results, figures_dir / "training_loss_curve.png")
 
-    # Plot confusion matrix
-    plot_confusion_matrix(all_preds_labels, figures_dir)
+    # Plot test confusion matrix
+    plot_confusion_matrix(
+        test_preds,
+        test_labels,
+        figures_dir / "test_confusion_matrix.png",
+        normalize=True,
+    )
 
     console.print(f"\nPlots saved to '{figures_dir}'")
 
@@ -1164,11 +1206,13 @@ def main():
         "comment": args.comment,
     }
 
-    results, all_preds_labels = train_lodo(
+    results, test_preds, test_labels, val_preds, val_labels = train_lodo(
         df, args.model_name, hparams, args.val, model_output_dir, args.save
     )
 
-    process_results(results, all_preds_labels, model_output_dir)
+    process_results(
+        results, model_output_dir, test_preds, test_labels, val_preds, val_labels
+    )
 
 
 if __name__ == "__main__":
