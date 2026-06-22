@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from matplotlib import pyplot as plt, lines as mlines
+import numpy as np
 
 from utils import console
 
@@ -17,26 +18,89 @@ def plot_validation_metric_curve_single(
 ):
     plt.figure(figsize=(10, 6))
     max_epochs = 0
+    mean = []
+    std = []
 
-    for i, (model_name, metrics) in enumerate(results.items()):
+    # Plot individual model curves
+    for i, (model_name, model_results) in enumerate(results.items()):
         if model_name == "overall":
             continue  # Skip overall for plotting
-        epochs = range(1, metrics["best_epoch"] + 1)  # +1 to include the best epoch
+        epochs = range(
+            1, model_results["best_epoch"] + 1
+        )  # +1 to include the best epoch
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
         max_epochs = max(max_epochs, len(epochs))
 
         plt.plot(
             epochs,
             [
-                metrics["validation_metrics"][i][label][metric]
-                for i in range(metrics["best_epoch"])
+                model_results["validation_metrics"][i][label][metric]
+                for i in range(model_results["best_epoch"])
             ],
-            color=plt.get_cmap("tab10")(i / len(results)),
+            color=plt.get_cmap("plasma")(i / (len(results) - 1)),
             marker=marker,
             mec="white",
             linestyle="-",
         )
 
+    results_at_epoch = [[] for _ in range(max_epochs)]
+
+    # Aggregate results across models for each epoch
+    for model_name, model_results in results.items():
+        if model_name == "overall":
+            continue  # Skip overall for plotting
+        best_epoch = model_results["best_epoch"]
+        for epoch in range(max_epochs):
+            if epoch < best_epoch:
+                results_at_epoch[epoch].append(
+                    model_results["validation_metrics"][epoch][label][metric]
+                )
+            else:
+                results_at_epoch[epoch].append(
+                    model_results["validation_metrics"][best_epoch - 1][label][metric]
+                )
+    for epoch in range(max_epochs):
+        mean.append(np.mean(results_at_epoch[epoch]))
+        std.append(np.std(results_at_epoch[epoch]))
+
+    mean = np.array(mean)
+    std = np.array(std)
+
+    # Plot shaded area for mean ± std
+    plt.fill_between(
+        range(1, len(mean) + 1),
+        mean - std,
+        mean + std,
+        color="gray",
+        alpha=0.3,
+        label="Mean ± Std Dev",
+    )
+
+    # Plot mean line
+    plt.plot(
+        range(1, len(mean) + 1),
+        mean,
+        color="black",
+        linestyle="--",
+        label="Mean",
+    )
+
+    # Plot the last point of the mean with a marker and annotation
+    plt.plot(
+        len(mean),
+        mean[-1],
+        marker="o",
+        color="black",
+        mec="white",
+    )
+    plt.annotate(
+        f"{mean[-1]:.3f}",
+        xy=(len(mean), mean[-1]),
+        xytext=(len(mean) - 0.01, mean[-1] + 0.02),
+        ha="right",
+    )
+
+    plt.legend()
     plt.xlabel("Epoch")
     plt.xticks(
         [
@@ -122,7 +186,7 @@ def plot_train_val_loss_curves(results, output_dir: Path):
 
 def plot_train_loss_curve(results, output_dir: Path):
     console.print("Plotting training loss curve...")
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=(10, 6))
     for i, (model_name, metrics) in enumerate(results.items()):
         if model_name == "overall":
             continue  # Skip overall and hyperparameter metrics for plotting
@@ -133,6 +197,7 @@ def plot_train_loss_curve(results, output_dir: Path):
             epochs,
             metrics["training_loss"][: len(epochs)],
             marker=marker,
+            color=plt.get_cmap("plasma")(i / (len(results) - 1)),
             mec="white",
             linestyle="-",
             alpha=0.8,
@@ -175,6 +240,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if not args.results_file.endswith("results.json"):
+        console.print("Error: Results file must be a JSON file named 'results.json'")
+        return
 
     with open(args.results_file, "r") as f:
         results = json.load(f)

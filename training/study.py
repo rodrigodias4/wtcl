@@ -27,6 +27,7 @@ from utils import (
 )
 from rich.progress import TaskID
 
+progress.speed_estimate_period = 60 * 60 * 6  # 6 hours
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 datetime_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 study_trials = {}
@@ -194,7 +195,19 @@ def main():
 
     with open(study_output_path, "w") as f:
         json.dump(
-            {"best_trial": study.best_trial.params, "trials": study_trials}, f, indent=4
+            {
+                "best_trial": {
+                    "hparams": study.best_trial.params,
+                    "value": study.best_trial.value,
+                    "number": study.best_trial.number,
+                    "results": study_trials[study.best_trial.number]["results"][
+                        "overall"
+                    ]["validation"],
+                },
+                "trials": study_trials,
+            },
+            f,
+            indent=4,
         )
 
     console.rule(f"Study Results")

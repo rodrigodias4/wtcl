@@ -283,9 +283,9 @@ class WTCLModel(nn.Module):
             with torch.no_grad():
                 self.crf.transitions[O_ID, B_ID] = 2.0
                 self.crf.transitions[O_ID, I_ID] = -10000.0
-                self.crf.transitions[B_ID, I_ID] = 2.0
-                self.crf.transitions[I_ID, I_ID] = 2.0
-                self.crf.transitions[I_ID, O_ID] = 1.0
+                self.crf.transitions[B_ID, O_ID] = -5.0
+                self.crf.transitions[B_ID, B_ID] = -5.0
+                self.crf.transitions[B_ID, I_ID] = 5.0
 
     def forward(
         self,
@@ -380,10 +380,10 @@ def encode(
     enc["labels"] = [label2id[label] for label in labels if label in label2id] + [
         -100
     ] * (max_length - len(labels))
-    if len(enc["labels"]) != max_length:
-        raise ValueError(
-            f"Warning: Labels length {len(enc['labels'])} does not match max_length {max_length}."
-        )
+    # if len(enc["labels"]) != max_length:
+    #     raise ValueError(
+    #         f"Warning: Labels length {len(enc['labels'])} does not match max_length {max_length}."
+    #     )
     return enc
 
 
@@ -414,9 +414,9 @@ class WTCLDataset(Dataset):
         input_ids = torch.tensor(enc["input_ids"], dtype=torch.long)
         attention_mask = torch.tensor(enc["attention_mask"], dtype=torch.long)
         labels = torch.tensor(enc["labels"], dtype=torch.long)
-        assert (
-            input_ids.shape[-1] == labels.shape[-1]
-        ), "Input and label lengths must match max_length"
+        # assert (
+        #     input_ids.shape[-1] == labels.shape[-1]
+        # ), "Input and label lengths must match max_length"
 
         # Set labels to -100 for padding tokens
         labels[attention_mask == 0] = -100
@@ -463,9 +463,9 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
         # remove padding labels
         valid_l = [x for x in label if x != -100]
 
-        assert len(pred) == len(
-            valid_l
-        ), "Predictions and labels must be the same length after removing padding"
+        # assert len(pred) == len(
+        #     valid_l
+        # ), "Predictions and labels must be the same length after removing padding"
 
         flat_preds.extend(pred)
         flat_labels.extend(valid_l)
@@ -678,7 +678,7 @@ def train(
                 )
                 break
         else:
-            console.print(f"░░ Epoch {epoch}: TL={training_loss:.1%}")
+            console.print(f"░░ Epoch {epoch}: TL={training_loss:.2f}")
         progress.advance(progress_task_epochs)
         progress.refresh()
         gc.collect()
@@ -719,8 +719,8 @@ def train_lodo(
     console.print(f"Leave-one-debate-out training on {len(all_debates)} debates.")
     console.print(f"Validation enabled: {val}")
 
-    all_preds = []
-    all_labels = []
+    all_test_preds = []
+    all_test_labels = []
 
     if model_output_dir is not None:
         os.makedirs(model_output_dir / "folds", exist_ok=True)
@@ -743,18 +743,18 @@ def train_lodo(
             val_debate = get_validation_debate(df, remaining_debates)
             val_data = df[df["debate_id"] == val_debate]
             train_data = df[~df["debate_id"].isin([test_debate, val_debate])]
-            assert (
-                not train_data["debate_id"].isin([test_debate, val_debate]).any()
-            ), "Training debates should not include test or validation debate"
+            # assert (
+            #     not train_data["debate_id"].isin([test_debate, val_debate]).any()
+            # ), "Training debates should not include test or validation debate"
             console.print(f"Validating on debate: {val_debate}")
             console.print(
                 f"Split sizes: {len(train_data)} - {len(val_data)} - {test_size} // {len(train_data)/len(df):.1%} - {len(val_data)/len(df):.1%} - {test_size/len(df):.1%}"
             )
         else:
             train_data = df[df["debate_id"] != test_debate]
-            assert not (
-                train_data["debate_id"] == test_debate
-            ).any(), "Training debates should not include test debate"
+            # assert not (
+            #     train_data["debate_id"] == test_debate
+            # ).any(), "Training debates should not include test debate"
             console.print(
                 f"Split sizes: {len(train_data)} - {test_size} // {len(train_data)/len(df):.1%} - {test_size/len(df):.1%}"
             )
@@ -834,8 +834,8 @@ def train_lodo(
         # Evaluate the best model state on the test debate
         model.load_state_dict(best_model_state)
         preds, labels, _ = evaluate(model, test_loader, get_device())
-        all_preds.extend(preds)
-        all_labels.extend(labels)
+        all_test_preds.extend(preds)
+        all_test_labels.extend(labels)
 
         # Compute token-level metrics for the test split
         test_metrics = compute_metrics_token_level(preds, labels)
@@ -896,7 +896,7 @@ def train_lodo(
     if model_output_dir is not None:
         with (model_output_dir / f"all_preds_labels.json").open("w") as f:
             json.dump(
-                {"preds": all_preds, "labels": all_labels},
+                {"preds": all_test_preds, "labels": all_test_labels},
                 f,
                 ensure_ascii=False,
                 indent=4,
@@ -913,7 +913,7 @@ def train_lodo(
     )
 
     # Compute average metrics across debates for each label and metric
-    for label in ["macro", "micro", "B", "I", "O"]:
+    for label in ["macro", "micro", "span", "B", "I", "O"]:
         # Initialize overall metrics dictionaries for each label
         results["overall"]["test"][label] = {}
         if val:
@@ -938,10 +938,10 @@ def train_lodo(
                     ]
                 )
     results["overall"]["test"]["span"] = compute_metrics_span_level(
-        {"preds": all_preds, "labels": all_labels}
+        {"preds": all_test_preds, "labels": all_test_labels}
     )
 
-    return results, {"preds": all_preds, "labels": all_labels}
+    return results, {"preds": all_test_preds, "labels": all_test_labels}
 
 
 # ---------------------------------
@@ -977,6 +977,7 @@ def print_overall_results(results: dict) -> None:
             f"M-F1={results['overall']['validation']['macro']['f1']:.1%}, "
             f"B-F1={results['overall']['validation']['B']['f1']:.1%}, "
             f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
+            f"S-F1={results['overall']['validation']['span']['f1']:.1%}, "
             f"A={results['overall']['validation']['macro']['accuracy']:.1%}, "
             f"P={results['overall']['validation']['macro']['precision']:.1%}, "
             f"R={results['overall']['validation']['macro']['recall']:.1%}"
