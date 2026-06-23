@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import json
 import math
 import re
 from pathlib import Path
@@ -154,19 +155,79 @@ def min_words(
             and row[text_col].endswith("-")
         ):
             console.print(
-                f"Removing row {row["id"]} from {row[debate_col]} with text: {row[text_col]!r} (word count: {_word_count(row[text_col])}) (spans: {row['spans']})"
+                f"Removing row {row['id']} from {row[debate_col]} with text: {row[text_col]!r} (word count: {_word_count(row[text_col])}) (spans: {row['spans']})"
             )
             df_min_words = df_min_words.drop(i)
     return df_min_words, len(df) - len(df_min_words)
 
 
 def remove_speech_markers(df: pd.DataFrame, text_col: str) -> pd.DataFrame:
+    def regex_clean_with_span_map(text, pattern):
+        """
+        Returns:
+        cleaned_text
+        map: original_index -> cleaned_index (or -1 if deleted)
+        """
+
+        matches = list(re.finditer(pattern, text))
+
+        remove_ranges = [(m.start(), m.end()) for m in matches]
+
+        orig_to_clean = [-1] * len(text)
+
+        cleaned = []
+        j = 0
+        i = 0
+
+        remove_i = 0
+
+        while i < len(text):
+
+            # skip removal spans
+            if remove_i < len(remove_ranges) and i == remove_ranges[remove_i][0]:
+                i = remove_ranges[remove_i][1]
+                remove_i += 1
+                continue
+
+            orig_to_clean[i] = j
+            cleaned.append(text[i])
+
+            i += 1
+            j += 1
+
+        return "".join(cleaned), orig_to_clean
+
+    def remap_span(span, mapping, text):
+        new = [
+            mapping[i] for i in range(span["start"], span["end"]) if mapping[i] != -1
+        ]
+
+        if not new:
+            return None
+
+        return {
+            "start": min(new),
+            "end": max(new) + 1,
+            "text": text[min(new) : max(new) + 1],
+        }
+
     df_cleaned = df.copy()
     for i, row in df.iterrows():
         text = row[text_col]
-        text = re.sub(r"\[.*\]", "", text)  # Remove content in square brackets
-        text = re.sub("\s\s+", " ", text)  # Replace multiple spaces with a single space
-        row[text_col] = text.strip()
+        spans = json.loads(row["spans"])
+        # Replace fancy apostrophes with standard apostrophes
+        text = re.sub("’", "'", text)
+        # Remove content in square brackets
+        text, orig_to_clean = regex_clean_with_span_map(text, r"\[.*\]")
+        spans = [remap_span(span, orig_to_clean, text) for span in spans]
+        # Remove content in parentheses
+        text, orig_to_clean = regex_clean_with_span_map(text, r"\(.*\)")
+        spans = [remap_span(span, orig_to_clean, text) for span in spans]
+        # Replace multiple spaces with a single space
+        text, orig_to_clean = regex_clean_with_span_map(text, r"\s\s+")
+        spans = [remap_span(span, orig_to_clean, text) for span in spans]
+        df_cleaned.loc[i, text_col] = text
+        df_cleaned.loc[i, "spans"] = json.dumps(spans, ensure_ascii=False)
     return df_cleaned
 
 
@@ -225,6 +286,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         min_words=args.min_words,
     )
     console.print(f"Removed {removed} turns with fewer than {args.min_words} words")
+
+    # Drop empty text rows after filtering
+    preprocessed = preprocessed[preprocessed[args.text_col] != ""]
 
     """ preprocessed, removed = clip_turns_per_debate(
         filtered,

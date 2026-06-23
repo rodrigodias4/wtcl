@@ -147,10 +147,10 @@ def compute_debate_to_indices(train_data: pd.DataFrame) -> dict:
     return debate_to_indices
 
 
-def compute_debate_to_bio_scores(train_data):
+def compute_debate_to_bio_scores(train_data, tokenizer):
     """
     Compute BIO scores for each debate based on their sequence labels.
-    @param train_data: Training data as a pandas DataFrame.
+    @param train_data: Training data as a Torch Dataset.
     @return: Dictionary mapping debate IDs to lists of BIO scores.
     """
     debate_to_bio_scores = defaultdict(list)
@@ -160,16 +160,27 @@ def compute_debate_to_bio_scores(train_data):
     records = train_data.to_dict("records")
 
     for idx, row in enumerate(records):
-        labels = np.array(ast.literal_eval(row["labels"]))
+        enc = encode(
+            row["text"],
+            ast.literal_eval(row["spans"]),
+            tokenizer,
+            max_length=MAX_LENGTH,
+        )
+
+        labels = np.array(enc["labels"])
+        labels = labels[
+            np.array(enc["attention_mask"]) == 1
+        ]  # Only consider non-padding tokens
 
         # CRF-relevant BIO signal
         score = 2 * np.sum(labels == B_ID) + 0.5 * np.sum(labels == I_ID)
 
         # normalization by sequence length to avoid bias towards longer sequences
-        score = score / labels.shape[0]
+        score = score / len(labels)
 
         debate_to_bio_scores[row["debate_id"]].append(float(score))
-
+        del enc, labels
+    del records
     return debate_to_bio_scores
 
 
@@ -249,7 +260,6 @@ class WTCLModel(nn.Module):
         super(WTCLModel, self).__init__()
         self.transformer = AutoModel.from_pretrained(
             model_name,
-            device_map=get_device(),
             dtype=torch.float32,
         )
         self.transformer.config.hidden_dropout_prob = 0.2
@@ -319,6 +329,7 @@ class WTCLModel(nn.Module):
                     logits, labels, mask=attention_mask.bool(), reduction="mean"
                 )
                 result["loss"] = loss
+                del labels
 
             result["predictions"] = self.crf.decode(logits, mask=attention_mask.bool())
         else:
@@ -356,7 +367,7 @@ def get_tokenizer(model_name: str) -> AutoTokenizer:
 
 def encode(
     text: str,
-    labels: list,
+    spans: list[dict],
     tokenizer: AutoTokenizer,
     max_length: int,
 ) -> dict:
@@ -364,7 +375,7 @@ def encode(
     Encode text and labels for the model.
 
     @param text: Input text to encode.
-    @param labels: List of labels corresponding to the tokens in the text.
+    @param spans: List of dictionaries representing the spans to tag.
     @param tokenizer: Tokenizer to use for encoding.
     @param max_length: Maximum sequence length for padding/truncation.
     @return: Dictionary containing encoded input_ids, attention_mask, and labels.
@@ -372,18 +383,40 @@ def encode(
     enc = tokenizer(
         text,
         add_special_tokens=False,
+        return_offsets_mapping=True,
         truncation=True,
         padding="max_length",
         max_length=max_length,
     )
 
-    enc["labels"] = [label2id[label] for label in labels if label in label2id] + [
-        -100
-    ] * (max_length - len(labels))
-    # if len(enc["labels"]) != max_length:
-    #     raise ValueError(
-    #         f"Warning: Labels length {len(enc['labels'])} does not match max_length {max_length}."
-    #     )
+    labels = [label2id["O"]] * len(enc["input_ids"])
+
+    def token_overlaps_span(tok_start, tok_end, span_start, span_end):
+        return tok_start < span_end and tok_end > span_start
+
+    for span in spans:
+        span_start = span["start"]
+        span_end = span["end"]
+
+        token_indices = []
+
+        for i, (tok_start, tok_end) in enumerate(enc["offset_mapping"]):
+            if token_overlaps_span(tok_start, tok_end, span_start, span_end):
+                token_indices.append(i)
+
+        if not token_indices:
+            continue
+
+        # BIO tagging
+        labels[token_indices[0]] = label2id["B"]
+        for idx in token_indices[1:]:
+            labels[idx] = label2id["I"]
+
+    enc["labels"] = labels
+    assert len(enc["input_ids"]) == len(
+        enc["labels"]
+    ), "Input IDs and labels must be the same length"
+
     return enc
 
 
@@ -406,7 +439,7 @@ class WTCLDataset(Dataset):
 
         enc = encode(
             item["text"],
-            ast.literal_eval(item["labels"]),
+            ast.literal_eval(item["spans"]),
             self.tokenizer,
             self.max_length,
         )
@@ -414,11 +447,19 @@ class WTCLDataset(Dataset):
         input_ids = torch.tensor(enc["input_ids"], dtype=torch.long)
         attention_mask = torch.tensor(enc["attention_mask"], dtype=torch.long)
         labels = torch.tensor(enc["labels"], dtype=torch.long)
-        # assert (
-        #     input_ids.shape[-1] == labels.shape[-1]
-        # ), "Input and label lengths must match max_length"
 
-        # Set labels to -100 for padding tokens
+        if len(enc["input_ids"]) != len(enc["labels"]):
+            # Convert input IDs back to tokens to see what the tokenizer actually did
+            actual_tokens = self.tokenizer.convert_ids_to_tokens(enc["input_ids"])
+            raw_labels = ast.literal_eval(item["labels"])
+
+            raise ValueError(
+                f"\nShape Mismatch at index {idx}!"
+                f"\nTokenizer produced {len(enc['input_ids'])} tokens: {actual_tokens}"
+                f"\nYour dataset has {len(enc['labels'])} labels: {raw_labels}"
+                f"\nRaw Text: '{item['text']}'"
+            )
+
         labels[attention_mask == 0] = -100
 
         return {
@@ -463,9 +504,9 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
         # remove padding labels
         valid_l = [x for x in label if x != -100]
 
-        # assert len(pred) == len(
-        #     valid_l
-        # ), "Predictions and labels must be the same length after removing padding"
+        assert len(pred) == len(
+            valid_l
+        ), "Predictions and labels must be the same length after removing padding"
 
         flat_preds.extend(pred)
         flat_labels.extend(valid_l)
@@ -714,7 +755,7 @@ def train_lodo(
     @param model_output_dir: Directory to save the trained models and results.
     @param save: Boolean indicating whether to save the trained models to disk.
     @param trial: Optional Optuna trial object for hyperparameter optimization.
-    @return: Tuple containing the results dictionary and a dictionary of all predictions and labels.
+    @return: Tuple containing the results dictionary and lists of test predictions, test labels, validation predictions, and validation labels.
     """
     all_debates = df["debate_id"].unique()
     results = {}
@@ -775,7 +816,7 @@ def train_lodo(
         )
 
         # Compute debate-level BIO scores for tempered sampling
-        debate_to_bio_scores = compute_debate_to_bio_scores(train_data)
+        debate_to_bio_scores = compute_debate_to_bio_scores(train_data, tokenizer)
 
         batch_sampler = TemperedBatchSampler(
             debate_to_indices=debate_to_indices,
@@ -787,8 +828,6 @@ def train_lodo(
             bio_alpha=hparams["bio_alpha"],
             bio_eps=hparams["bio_eps"],
         )
-
-        test_data = df[df["debate_id"] == test_debate]
 
         # Prepare datasets and dataloaders
         train_dataset = WTCLDataset(
@@ -835,6 +874,7 @@ def train_lodo(
                 torch.save(best_model_state, f)
 
         # Create test split dataset and dataloader
+        test_data = df[df["debate_id"] == test_debate]
         test_dataset = WTCLDataset(test_data.to_dict("records"), tokenizer, MAX_LENGTH)
         test_loader = DataLoader(
             test_dataset, batch_size=hparams["batch_size"], shuffle=False
@@ -959,7 +999,7 @@ def train_lodo(
                     ]
                 )
     results["overall"]["test"]["span"] = compute_metrics_span_level(
-        {"preds": all_test_preds, "labels": all_test_labels}
+        all_test_preds, all_test_labels
     )
 
     return (

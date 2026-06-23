@@ -52,23 +52,22 @@ def get_validation_debate(df: pd.DataFrame, debates: list[str]) -> str:
     """
     debate_ratios = {}
     for debate in debates:
-        n_positive_tokens = 0
+        n_positive_chars = 0
         n_tokens = 0
         debate_data = df[df["debate_id"] == debate]
 
         for index, row in debate_data.iterrows():
-            labels = eval(row["labels"])
-            n_positive_tokens += sum(
-                label2id[label] > 0 for label in labels if label in label2id
-            )
-            n_tokens += len(labels)
+            spans = eval(row["spans"])
+            for span in spans:
+                n_positive_chars += span["end"] - span["start"]
+            n_tokens += len(row["text"])
 
-        debate_ratios[debate] = n_positive_tokens / n_tokens if n_tokens > 0 else 0
+        debate_ratios[debate] = n_positive_chars / n_tokens if n_tokens > 0 else 0
 
-    # Find the debate with the closest number of positive tokens to the mean
-    mean_positive_tokens = sum(debate_ratios.values()) / len(debate_ratios)
+    # Find the debate with the closest number of positive characters to the mean
+    mean_positive_chars = sum(debate_ratios.values()) / len(debate_ratios)
     val_debate = min(
-        debate_ratios, key=lambda x: abs(debate_ratios[x] - mean_positive_tokens)
+        debate_ratios, key=lambda x: abs(debate_ratios[x] - mean_positive_chars)
     )
 
     return val_debate

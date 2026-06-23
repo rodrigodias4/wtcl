@@ -223,3 +223,4 @@ README.md
 
 training/models
 training/*.json
+training/studies
