@@ -31,6 +31,7 @@ progress.speed_estimate_period = 60 * 60 * 6  # 6 hours
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 datetime_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 study_trials = {}
+progress_task_trials: TaskID = None
 
 signal.signal(signal.SIGINT, handle_interrupt)
 
@@ -57,6 +58,8 @@ def callback(study: optuna.Study, trial: optuna.Trial):
     console.print(
         f"Best trial so far: {study.best_trial.number} with value: {study.best_trial.value:.1%}"
     )
+    # Advance the progress bar for hyperparameter tuning trials
+    progress.advance(progress_task_trials)
 
 
 def objective(
@@ -64,7 +67,6 @@ def objective(
     df: pd.DataFrame,
     model_name: str,
     fixed_hparams: dict,
-    progress_task_trials: TaskID = None,
 ) -> float:
     hparams = sample_hparams(trial)
     hparams = hparams | fixed_hparams  # Merge sampled hyperparameters with fixed ones
@@ -72,7 +74,7 @@ def objective(
     console.rule(f"Trial {trial.number}", style="bold cyan")
 
     # Train the model with the current set of hyperparameters and get the fold metrics
-    results, _ = train_lodo(
+    results, _, _, _, _ = train_lodo(
         df=df,
         model_name=model_name,
         hparams=hparams,
@@ -96,10 +98,6 @@ def objective(
     # Free up memory after each trial
     gc.collect()
     torch.cuda.empty_cache()
-
-    # Advance the progress bar for hyperparameter tuning trials
-    if progress_task_trials is not None:
-        progress.update(progress_task_trials, advance=1)
 
     return deciding_metric
 
@@ -133,23 +131,22 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Whether to use a CRF layer on top of the transformer model.",
     )
+    parser.add_argument(
+        "--starting_hparams",
+        type=str,
+        default=None,
+        help="Path to JSON file with starting hyperparameters for the study.",
+    )
     # TODO: Add additional hyperparameters
     args = parser.parse_args()
     return args
 
 
 def main():
+    global progress_task_trials
     set_random_seed(RANDOM_SEED)
     args = parse_args()
     study_name = f"study_{args.input_file.split('/')[-1].split('.')[0].split('_')[0]}_{args.model_name.split('/')[-1]}_{datetime_now}"
-
-    # Create a new Optuna study for hyperparameter tuning
-    study = optuna.create_study(
-        direction="maximize",
-        sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
-        pruner=optuna.pruners.MedianPruner(),
-        study_name=study_name,
-    )
 
     fixed_hparams = {
         "num_epochs": args.num_epochs,
@@ -175,6 +172,19 @@ def main():
     )
     progress.start()
 
+    # Create a new Optuna study for hyperparameter tuning
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
+        pruner=optuna.pruners.MedianPruner(),
+        study_name=study_name,
+    )
+
+    if args.starting_hparams:
+        with open(args.starting_hparams, "r") as f:
+            starting_hparams = json.load(f)
+        study.enqueue_trial(starting_hparams)
+
     # Run hyperparameter tuning with Optuna
     study.optimize(
         lambda trial: objective(
@@ -182,7 +192,6 @@ def main():
             df,
             args.model_name,
             fixed_hparams=fixed_hparams,
-            progress_task_trials=progress_task_trials,
         ),
         n_trials=args.num_trials,
         show_progress_bar=False,

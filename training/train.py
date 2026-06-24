@@ -56,7 +56,7 @@ logging.disable_progress_bar()
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 MAX_LENGTH = 512
-EARLY_STOPPING_DELTA = 0.0075  # Minimum improvement in validation macro F1 to reset early stopping counter (0.75%)
+EARLY_STOPPING_DELTA = 0.005  # Minimum improvement in validation macro F1 to reset early stopping counter (0.5%)
 PATIENCE = 2  # Number of epochs to wait for improvement before early stopping
 
 RANDOM_SEED = 42
@@ -394,6 +394,7 @@ def encode(
     def token_overlaps_span(tok_start, tok_end, span_start, span_end):
         return tok_start < span_end and tok_end > span_start
 
+    # Assign BIO labels to tokens based on the provided spans
     for span in spans:
         span_start = span["start"]
         span_end = span["end"]
@@ -784,7 +785,7 @@ def train_lodo(
     )
     # Leave-one-debate-out
     for i, test_debate in enumerate(all_debates):
-        console.rule(f"Fold for test debate: {test_debate}")
+        console.rule(f"Fold {i + 1} for test debate: {test_debate}")
         remaining_debates = [d for d in all_debates if d != test_debate]
         test_size = len(df[df["debate_id"] == test_debate])
 
@@ -927,6 +928,8 @@ def train_lodo(
             )
 
             if trial.should_prune():
+                console.print(f"Trial pruned at fold {i + 1} for debate {test_debate}")
+                progress.remove_task(progress_folds)
                 raise TrialPruned()
 
         del (
