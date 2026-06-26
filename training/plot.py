@@ -8,7 +8,7 @@ import numpy as np
 
 from utils import console
 
-PLOT_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]  # extend if needed
+PLOT_MARKERS = ["s", "^", "D", "v", "P", "X", "p", ">"]  # extend if needed
 
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
@@ -101,7 +101,7 @@ def plot_validation_metric_curve_single(
         ha="right",
     )
 
-    plt.legend(loc="lower right")
+    plt.legend(loc="lower right" if mean[-1] > 0.5 else "upper right")
     plt.xlabel("Epoch")
     plt.xticks(
         [
