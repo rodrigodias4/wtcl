@@ -119,11 +119,13 @@ def chunk_spans(
         chunk_spans = []
         for span in spans:
             if span["start"] < chunk_end_char and span["end"] > chunk_start_char:
+                span_start = max(span["start"], chunk_start_char) - chunk_start_char
+                span_end = min(span["end"], chunk_end_char) - chunk_start_char
                 chunk_spans.append(
                     {
-                        "start": max(span["start"], chunk_start_char)
-                        - chunk_start_char,
-                        "end": min(span["end"], chunk_end_char) - chunk_start_char,
+                        "start": span_start,
+                        "end": span_end,
+                        "text": chunk_text[span_start:span_end],
                     }
                 )
 

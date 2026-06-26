@@ -56,7 +56,7 @@ logging.disable_progress_bar()
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 MAX_LENGTH = 512
-EARLY_STOPPING_DELTA = 0.005  # Minimum improvement in validation macro F1 to reset early stopping counter (0.5%)
+EARLY_STOPPING_DELTA = 0.0045  # Minimum improvement in validation macro F1 to reset early stopping counter (0.45%)
 PATIENCE = 2  # Number of epochs to wait for improvement before early stopping
 
 RANDOM_SEED = 42
@@ -711,7 +711,7 @@ def train(
                 f"░░ Epoch {epoch}: "
                 f"TL={training_loss:.2f}, "
                 f"VL={val_loss:.2f}, "
-                f"M-F1={validation_metrics['macro']['f1']:.1%}, "
+                f"M-F1={validation_metrics['macro']['f1']:.2%}, "
                 f"B-F1={validation_metrics['B']['f1']:.1%} "
                 f"I-F1={validation_metrics['I']['f1']:.1%} "
                 f"S-F1={validation_metrics['span']['f1']:.1%} "
@@ -909,7 +909,7 @@ def train_lodo(
         # Print test metrics for the current debate
         console.print(
             f"Test | "
-            f"M-F1={test_metrics['macro']['f1']:.1%}, "
+            f"M-F1={test_metrics['macro']['f1']:.2%}, "
             f"B-F1={test_metrics['B']['f1']:.1%}, "
             f"I-F1={test_metrics['I']['f1']:.1%}, "
             f"S-F1={span_metrics['f1']:.1%}, "
@@ -920,13 +920,19 @@ def train_lodo(
 
         # Report to Optuna trial if provided
         if trial is not None:
-            trial.report(
-                model_results["validation_metrics"][model_results["best_epoch"] - 1][
-                    "macro"
-                ]["f1"],
-                i,
+            # Report the mean macro F1 score across all completed folds to Optuna for pruning decisions
+            cumulative_mean_macro_f1 = np.array(
+                [
+                    mr["best_validation_metrics"]["macro"]["f1"]
+                    for mr in results.values()
+                ]
+            ).mean()
+            trial.report(cumulative_mean_macro_f1, i)
+            console.print(
+                f"Trial report: Cumulative mean M-F1={cumulative_mean_macro_f1:.2%}"
             )
 
+            # Check if the trial should be pruned
             if trial.should_prune():
                 console.print(f"Trial pruned at fold {i + 1} for debate {test_debate}")
                 progress.remove_task(progress_folds)
@@ -1023,7 +1029,7 @@ def print_overall_results(results: dict) -> None:
     # Print overall token-level test metrics
     console.print(
         f"\nOverall test metrics: "
-        f"M-F1={results['overall']['test']['macro']['f1']:.1%}, "
+        f"M-F1={results['overall']['test']['macro']['f1']:.2%}, "
         f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
         f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
         f"A={results['overall']['test']['macro']['accuracy']:.1%}, "
@@ -1072,7 +1078,7 @@ def process_results(
     figures_dir.mkdir(exist_ok=True)
 
     # Print per-left-out-debate results
-    console.print("\nPer-left-out-debate results:")
+    console.print("\nPer-left-out-debate test results:")
     for debate, metrics in results.items():
         if debate == "overall":
             continue

@@ -137,6 +137,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to JSON file with starting hyperparameters for the study.",
     )
+    parser.add_argument(
+        "--n_startup_trials",
+        type=int,
+        default=5,
+        help="Number of startup trials for the Optuna pruner.",
+    )
+    parser.add_argument(
+        "--n_warmup_steps",
+        type=int,
+        default=2,
+        help="Number of warmup steps (folds) for the Optuna pruner.",
+    )
     # TODO: Add additional hyperparameters
     args = parser.parse_args()
     return args
@@ -176,7 +188,9 @@ def main():
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
-        pruner=optuna.pruners.MedianPruner(),
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=args.n_startup_trials, n_warmup_steps=args.n_warmup_steps
+        ),
         study_name=study_name,
     )
 
