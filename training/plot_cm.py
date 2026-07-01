@@ -88,6 +88,7 @@ def compute_metrics_span_level(all_preds: list, all_labels: list) -> dict:
             id2label_seqeval[label_id] for label_id in all_preds[i]
         ]  # Convert prediction IDs to label names
 
+    # Exact match evaluation using seqeval
     report = classification_report(
         all_labels, all_preds, output_dict=True, zero_division=0
     )

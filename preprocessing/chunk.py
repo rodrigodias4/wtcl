@@ -46,7 +46,7 @@ def chunk_spans(
     spans: list,
     tokenizer: AutoTokenizer,
     stride: int,
-    max_length: int = 512,
+    max_length: int,
 ):
     """
     Splits text into span-safe chunks while preserving raw text and remapped spans.
@@ -169,6 +169,18 @@ def parse_args() -> argparse.Namespace:
         default=MODEL,
         help="Tokenizer model name (only for checking tokenization > max_length)",
     )
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=512,
+        help="Stride for chunking",
+    )
+    parser.add_argument(
+        "--max_length",
+        type=int,
+        default=512,
+        help="Maximum token length for each chunk",
+    )
     return parser.parse_args()
 
 
@@ -187,7 +199,7 @@ def main():
     all_rows = []
     overlapping_chunks = 0
 
-    for index, row in progress.track(
+    for _, row in progress.track(
         data.iterrows(), total=len(data), description="Converting spans to BIO"
     ):
         chunks = chunk_spans(
@@ -195,8 +207,8 @@ def main():
             text=row["text"],
             spans=json.loads(row["spans"]),
             tokenizer=tokenizer,
-            stride=512,
-            max_length=512,
+            stride=args.stride,
+            max_length=args.max_length,
         )
         if len(chunks) > 1:
             overlapping_chunks += len(chunks)
@@ -205,9 +217,10 @@ def main():
         for chunk_id, chunk in enumerate(chunks):
             new_rows.append(
                 {
-                    "debate_id": row["debate_id"] if "debate_id" in row else index,
+                    "debate_id": row["debate_id"],
                     "id": row["id"],
                     "chunk_id": chunk_id,
+                    "speaker": row["speaker"],
                     "text": chunk["text"],
                     "spans": json.dumps(chunk["spans"], ensure_ascii=False),
                 }
