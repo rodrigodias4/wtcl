@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime
 import gc
 import json
+from math import ceil
 import os
 from pathlib import Path
 import random
@@ -17,6 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.amp import autocast, GradScaler
 
 from transformers import (
     AutoModel,
@@ -187,14 +189,16 @@ def compute_debate_to_bio_scores(train_data, tokenizer):
 class TemperedBatchSampler(Sampler):
     def __init__(
         self,
-        debate_to_indices,
-        debate_to_bio_scores,
-        debates,
-        debate_weights,
-        batch_size,
-        num_batches,
-        bio_alpha,
-        bio_eps,
+        debate_to_indices: list[list],
+        debate_to_bio_scores: list[list],
+        debates: list,
+        debate_weights: list,
+        batch_size: int,
+        num_batches: int,
+        bio_alpha: float,
+        bio_eps: float,
+        debate_alpha: float,
+        shuffle: bool = False,
     ):
         self.debate_to_indices = debate_to_indices
         self.debate_to_bio_scores = debate_to_bio_scores
@@ -202,33 +206,47 @@ class TemperedBatchSampler(Sampler):
         self.debate_weights = debate_weights
         self.batch_size = batch_size
         self.num_batches = num_batches
+        self.shuffle = shuffle
 
         self.bio_alpha = bio_alpha
         self.bio_eps = bio_eps
 
-        self.debate_schedule = np.random.choice(
-            self.debates, size=self.num_batches, p=self.debate_weights
-        )
+        self.use_debate_tempering = debate_alpha != 1.0
+        self.use_bio_tempering = bio_alpha != 0
+
+    def _build_normal_debate_schedule(self):
+        schedule = []
+
+        for d in self.debates:
+            schedule.extend([d] * self.num_batches)
+
+        if self.shuffle:
+            random.shuffle(schedule)
+        return schedule
+
+    def _normal_sample_from_debate(self, debate):
+        pool = self.debate_pools[debate]
+        ptr = self.debate_ptrs[debate]
+
+        batch = pool[ptr : ptr + self.batch_size]
+        self.debate_ptrs[debate] += len(batch)
+
+        return batch
 
     def _sample_from_debate(self, debate):
         """
         Sample sequences from a given debate based on BIO scores.
         @param debate: Debate ID to sample from.
         @return: List of sampled indices for the batch."""
+        if not self.use_bio_tempering:
+            return self._normal_sample_from_debate(debate)
 
         indices = self.debate_to_indices[debate]
         bio_scores = self.debate_to_bio_scores[debate]
 
         weights = np.array(bio_scores, dtype=np.float32)
-
-        # BIO-tempered weighting
         weights = np.power(weights + self.bio_eps, self.bio_alpha)
-
-        # avoid degenerate all-zero case
-        if weights.sum() == 0:
-            return random.sample(indices, self.batch_size)
-
-        weights = weights / weights.sum()
+        weights /= weights.sum()
 
         chosen = np.random.choice(
             indices, size=self.batch_size, replace=False, p=weights
@@ -237,6 +255,26 @@ class TemperedBatchSampler(Sampler):
         return chosen.tolist()
 
     def __iter__(self):
+        if self.use_debate_tempering:
+            self.debate_schedule = np.random.choice(
+                self.debates, size=self.num_batches, p=self.debate_weights
+            )
+        else:
+            self.debate_schedule = self._build_normal_debate_schedule()
+
+        if not self.use_bio_tempering:
+            self.debate_pools = {}
+            self.debate_ptrs = {}
+
+            for d in self.debates:
+                pool = self.debate_to_indices[d].copy()
+
+                if self.shuffle:
+                    random.shuffle(pool)
+
+                self.debate_pools[d] = pool
+                self.debate_ptrs[d] = 0
+
         for i in range(self.num_batches):
             # Tempered sampling of debates at the batch level
             d = self.debate_schedule[i]
@@ -293,9 +331,9 @@ class WTCLModel(nn.Module):
             with torch.no_grad():
                 self.crf.transitions[O_ID, B_ID] = 2.0
                 self.crf.transitions[O_ID, I_ID] = -10000.0
-                self.crf.transitions[B_ID, O_ID] = -5.0
-                self.crf.transitions[B_ID, B_ID] = -5.0
-                self.crf.transitions[B_ID, I_ID] = 5.0
+                self.crf.transitions[B_ID, O_ID] = -2.0
+                self.crf.transitions[B_ID, B_ID] = -2.0
+                self.crf.transitions[B_ID, I_ID] = 2.0
 
     def forward(
         self,
@@ -321,8 +359,7 @@ class WTCLModel(nn.Module):
         if self.use_crf:
             if labels is not None:
                 # Set padding token labels to 0 for loss computation (ignored in CRF with mask)
-                labels = labels.clone().detach()
-                labels[labels == -100] = 0
+                labels = labels.masked_fill(labels == -100, 0)
 
                 # Training loss is negative log-likelihood from CRF
                 loss = -self.crf(
@@ -331,7 +368,10 @@ class WTCLModel(nn.Module):
                 result["loss"] = loss
                 del labels
 
-            result["predictions"] = self.crf.decode(logits, mask=attention_mask.bool())
+            if not self.training:
+                result["predictions"] = self.crf.decode(
+                    logits, mask=attention_mask.bool()
+                )
         else:
             if labels is not None:
                 # Compute cross-entropy loss for non-CRF case
@@ -343,8 +383,9 @@ class WTCLModel(nn.Module):
                 )
                 result["loss"] = loss
 
-            # Get predictions by taking the argmax of logits for non-CRF case
-            result["predictions"] = torch.argmax(logits, dim=-1).cpu().tolist()
+            if not self.training:
+                # Get predictions by taking the argmax of logits for non-CRF case
+                result["predictions"] = torch.argmax(logits, dim=-1).cpu().tolist()
         del logits
         return result
 
@@ -611,6 +652,7 @@ def train(
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     device: torch.device,
     epochs: int,
+    scaler: GradScaler = None,
     val_loader: DataLoader = None,
 ) -> tuple[dict, dict]:
     """
@@ -652,19 +694,36 @@ def train(
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
 
-            outputs = model(
-                input_ids=input_ids, attention_mask=attention_mask, labels=labels
-            )
+            if scaler is None:
+                outputs = model(
+                    input_ids=input_ids, attention_mask=attention_mask, labels=labels
+                )
+                loss = outputs["loss"]
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
+            else:
+                with autocast("cuda"):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                    )
 
-            loss = outputs["loss"]
-            loss.backward()
+                    loss = outputs["loss"]
+
+                scaler.scale(loss).backward()
+
+                scaler.step(optimizer)
+
+                scale = scaler.get_scale()
+                scaler.update()
+                if not scale > scaler.get_scale():
+                    scheduler.step()
 
             total_sequences += batch_size
             total_training_loss += loss.item() * batch_size
             del loss, outputs, input_ids, attention_mask, labels
-
-            optimizer.step()
-            scheduler.step()
 
             progress.advance(progress_task_batches)
         progress.remove_task(progress_task_batches)
@@ -678,13 +737,6 @@ def train(
 
         if val_loader is not None:
             preds, labels, val_loss = evaluate(model, val_loader, get_device())
-            """ logits = torch.tensor(logits, dtype=torch.float32)
-            val_loss = F.cross_entropy(
-                logits.view(-1, logits.shape[-1]),
-                torch.tensor(labels, dtype=torch.long).view(-1),
-                ignore_index=-100,
-                reduction="mean",
-            ) """
             model_results["validation_loss"].append(val_loss)
             validation_metrics = compute_metrics_token_level(preds, labels)
             validation_metrics["span"] = compute_metrics_span_level(preds, labels)
@@ -694,7 +746,7 @@ def train(
             if validation_metrics["macro"]["f1"] > best_macro_f1 + EARLY_STOPPING_DELTA:
                 # Save current best model state, epoch and macro F1 score
                 best_macro_f1 = validation_metrics["macro"]["f1"]
-                best_model_state = deepcopy(model.state_dict())
+                best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
                 best_epoch = epoch
                 model_results["best_epoch"] = best_epoch
 
@@ -719,7 +771,7 @@ def train(
                 f"A={validation_metrics['macro']['accuracy']:.1%}, "
                 f"P={validation_metrics['macro']['precision']:.1%}, "
                 f"R={validation_metrics['macro']['recall']:.1%}"
-                f"{('\t' + '[magenta]★[/magenta]') if epoch == best_epoch else ''}"
+                f"{('\t\t' + '[magenta]★[/magenta]') if epoch == best_epoch else ''}"
             )
             if epochs_no_improve >= PATIENCE:
                 console.print(
@@ -772,6 +824,7 @@ def train_lodo(
     all_test_labels = []
     all_validation_preds = []
     all_validation_labels = []
+    scaler = GradScaler() if hparams["mixed_precision"] else None
 
     if model_output_dir is not None:
         os.makedirs(model_output_dir / "folds", exist_ok=True)
@@ -819,22 +872,30 @@ def train_lodo(
         # Compute debate-level BIO scores for tempered sampling
         debate_to_bio_scores = compute_debate_to_bio_scores(train_data, tokenizer)
 
-        batch_sampler = TemperedBatchSampler(
-            debate_to_indices=debate_to_indices,
-            debate_to_bio_scores=debate_to_bio_scores,
-            debates=remaining_debates,
-            debate_weights=debate_weights,
-            batch_size=hparams["batch_size"],
-            num_batches=len(train_data) // hparams["batch_size"],
-            bio_alpha=hparams["bio_alpha"],
-            bio_eps=hparams["bio_eps"],
-        )
+        batch_sampler = None
+        if hparams["debate_alpha"] < 1 or hparams["bio_alpha"] > 0:
+            batch_sampler = TemperedBatchSampler(
+                debate_to_indices=debate_to_indices,
+                debate_to_bio_scores=debate_to_bio_scores,
+                debates=remaining_debates,
+                debate_weights=debate_weights,
+                batch_size=hparams["batch_size"],
+                num_batches=len(train_data) // hparams["batch_size"],
+                bio_alpha=hparams["bio_alpha"],
+                bio_eps=hparams["bio_eps"],
+                debate_alpha=hparams["debate_alpha"],
+                shuffle=False,
+            )
 
         # Prepare datasets and dataloaders
         train_dataset = WTCLDataset(
             train_data.to_dict("records"), tokenizer, MAX_LENGTH
         )
-        train_loader = DataLoader(train_dataset, batch_sampler=batch_sampler)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=batch_sampler,
+            batch_size=1 if batch_sampler is not None else hparams["batch_size"],
+        )
 
         if val:
             val_dataset = WTCLDataset(
@@ -866,7 +927,8 @@ def train_lodo(
             scheduler,
             get_device(),
             hparams["num_epochs"],
-            val_loader,
+            scaler=scaler,
+            val_loader=val_loader,
         )
 
         # Save the best model state for this debate
@@ -1199,6 +1261,11 @@ def parse_args() -> argparse.Namespace:
         help="Whether to use emission bias for CRF layer.",
     )
     parser.add_argument(
+        "--mixed_precision",
+        action="store_true",
+        help="Whether to use mixed precision training (FP16) for faster training and lower memory usage.",
+    )
+    parser.add_argument(
         "--comment",
         type=str,
         default="",
@@ -1251,6 +1318,7 @@ def main():
         "bio_eps": args.bio_eps,
         "crf_priors": args.crf_priors,
         "emission_bias": args.emission_bias,
+        "mixed_precision": args.mixed_precision,
         "freeze": args.freeze,
         "comment": args.comment,
     }

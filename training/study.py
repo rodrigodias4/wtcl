@@ -169,6 +169,7 @@ def main():
         "crf_priors": False,
         "emission_bias": False,
         "freeze": 0,
+        "mixed_precision": True,
     }
 
     # Create output directory for the study results
