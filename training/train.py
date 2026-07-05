@@ -67,6 +67,13 @@ B_ID = label2id["B"]
 I_ID = label2id["I"]
 O_ID = label2id["O"]
 
+mp_str_to_dtype = {
+    "fp16": torch.float16,
+    "bf16": torch.bfloat16,
+    "none": None,
+}
+scaler = GradScaler()
+
 signal.signal(signal.SIGINT, handle_interrupt)
 
 
@@ -652,8 +659,8 @@ def train(
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     device: torch.device,
     epochs: int,
-    scaler: GradScaler = None,
     val_loader: DataLoader = None,
+    mixed_precision_dtype: torch.dtype = None,
 ) -> tuple[dict, dict]:
     """
     Train the model with optional validation and early stopping.
@@ -694,7 +701,7 @@ def train(
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
 
-            if scaler is None:
+            if mixed_precision_dtype is None:
                 outputs = model(
                     input_ids=input_ids, attention_mask=attention_mask, labels=labels
                 )
@@ -702,14 +709,13 @@ def train(
                 loss.backward()
                 optimizer.step()
                 scheduler.step()
-            else:
-                with autocast("cuda"):
+            elif mixed_precision_dtype == torch.float16:
+                with autocast(device_type="cuda", dtype=mixed_precision_dtype):
                     outputs = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
                     )
-
                     loss = outputs["loss"]
 
                 scaler.scale(loss).backward()
@@ -720,6 +726,22 @@ def train(
                 scaler.update()
                 if not scale > scaler.get_scale():
                     scheduler.step()
+            elif mixed_precision_dtype == torch.bfloat16:
+                with autocast(device_type="cuda", dtype=mixed_precision_dtype):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                    )
+                    loss = outputs["loss"]
+
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
+            else:
+                raise ValueError(
+                    f"Unsupported mixed precision dtype: {mixed_precision_dtype}"
+                )
 
             total_sequences += batch_size
             total_training_loss += loss.item() * batch_size
@@ -824,7 +846,7 @@ def train_lodo(
     all_test_labels = []
     all_validation_preds = []
     all_validation_labels = []
-    scaler = GradScaler() if hparams["mixed_precision"] else None
+    mixed_precision_dtype = mp_str_to_dtype.get(hparams["mixed_precision_dtype"])
 
     if model_output_dir is not None:
         os.makedirs(model_output_dir / "folds", exist_ok=True)
@@ -927,8 +949,8 @@ def train_lodo(
             scheduler,
             get_device(),
             hparams["num_epochs"],
-            scaler=scaler,
             val_loader=val_loader,
+            mixed_precision_dtype=mixed_precision_dtype,
         )
 
         # Save the best model state for this debate
@@ -1261,9 +1283,11 @@ def parse_args() -> argparse.Namespace:
         help="Whether to use emission bias for CRF layer.",
     )
     parser.add_argument(
-        "--mixed_precision",
-        action="store_true",
-        help="Whether to use mixed precision training (FP16) for faster training and lower memory usage.",
+        "--mixed_precision_dtype",
+        type=str,
+        choices=["fp16", "bf16", "none"],
+        default="bf16",
+        help="Data type for mixed precision training.",
     )
     parser.add_argument(
         "--comment",
@@ -1286,14 +1310,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Whether to perform validation during training (enables early stopping).",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=RANDOM_SEED,
+        help="Random seed for reproducibility.",
+    )
     return parser.parse_args()
 
 
 def main():
-    set_random_seed(RANDOM_SEED)
     torch.cuda.empty_cache()
     torch.set_default_dtype(torch.float32)
     args = parse_args()
+    set_random_seed(args.seed)
     if args.dataset_name == "":
         args.dataset_name = Path(args.input_file).name.split(".")[0].split("_")[0]
 
@@ -1318,8 +1348,9 @@ def main():
         "bio_eps": args.bio_eps,
         "crf_priors": args.crf_priors,
         "emission_bias": args.emission_bias,
-        "mixed_precision": args.mixed_precision,
+        "mixed_precision_dtype": args.mixed_precision_dtype,
         "freeze": args.freeze,
+        "seed": args.seed,
         "comment": args.comment,
     }
 

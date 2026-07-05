@@ -43,7 +43,7 @@ signal.signal(signal.SIGINT, handle_interrupt)
 # Hyperparameter sampling function
 def sample_hparams(trial: optuna.Trial) -> dict:
     return {
-        "lr": trial.suggest_float("lr", 1e-6, 5e-5, log=True),
+        "lr": trial.suggest_float("lr", 5e-6, 5e-5, log=True),
         "batch_size": trial.suggest_categorical("batch_size", [8]),
         "weight_decay": trial.suggest_categorical(
             "weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 3e-2, 1e-1]
@@ -123,7 +123,7 @@ def parse_args() -> argparse.Namespace:
         help="Number of trials for hyperparameter tuning",
     )
     parser.add_argument(
-        "--num_epochs", type=int, default=15, help="Number of epochs for training"
+        "--num_epochs", type=int, default=10, help="Number of epochs for training"
     )
     parser.add_argument(
         "--use_crf",
@@ -149,6 +149,12 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Number of warmup steps (folds) for the Optuna pruner.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=RANDOM_SEED,
+        help="Random seed for reproducibility.",
+    )
     # TODO: Add additional hyperparameters
     args = parser.parse_args()
     return args
@@ -156,8 +162,8 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     global progress_task_trials
-    set_random_seed(RANDOM_SEED)
     args = parse_args()
+    set_random_seed(args.seed)
     study_name = f"study_{args.input_file.split('/')[-1].split('.')[0].split('_')[0]}_{args.model_name.split('/')[-1]}_{datetime_now}"
 
     fixed_hparams = {
@@ -169,7 +175,8 @@ def main():
         "crf_priors": False,
         "emission_bias": False,
         "freeze": 0,
-        "mixed_precision": True,
+        "seed": args.seed,
+        "mixed_precision_dtype": "bf16",
     }
 
     # Create output directory for the study results
