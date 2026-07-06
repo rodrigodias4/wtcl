@@ -224,8 +224,15 @@ class TemperedBatchSampler(Sampler):
     def _build_normal_debate_schedule(self):
         schedule = []
 
-        for d in self.debates:
-            schedule.extend([d] * self.num_batches)
+        for debate in self.debates:
+            debate_batches = ceil(len(self.debate_to_indices[debate]) / self.batch_size)
+            schedule.extend([debate] * debate_batches)
+
+        if len(schedule) < self.num_batches:
+            repeats = ceil(self.num_batches / max(len(schedule), 1))
+            schedule = (schedule * repeats)[: self.num_batches]
+        else:
+            schedule = schedule[: self.num_batches]
 
         if self.shuffle:
             random.shuffle(schedule)
@@ -235,8 +242,23 @@ class TemperedBatchSampler(Sampler):
         pool = self.debate_pools[debate]
         ptr = self.debate_ptrs[debate]
 
+        if ptr >= len(pool):
+            pool = self.debate_to_indices[debate].copy()
+
+            if self.shuffle:
+                random.shuffle(pool)
+
+            self.debate_pools[debate] = pool
+            self.debate_ptrs[debate] = 0
+            ptr = 0
+
         batch = pool[ptr : ptr + self.batch_size]
         self.debate_ptrs[debate] += len(batch)
+
+        if len(batch) == 0:
+            raise RuntimeError(
+                f"Debate '{debate}' produced an empty batch. Check batch_size and debate sampling."
+            )
 
         return batch
 
@@ -264,7 +286,9 @@ class TemperedBatchSampler(Sampler):
     def __iter__(self):
         if self.use_debate_tempering:
             self.debate_schedule = np.random.choice(
-                self.debates, size=self.num_batches, p=self.debate_weights
+                self.debates,
+                size=self.num_batches,
+                p=self.debate_weights,
             )
         else:
             self.debate_schedule = self._build_normal_debate_schedule()
@@ -860,6 +884,9 @@ def train_lodo(
     )
     # Leave-one-debate-out
     for i, test_debate in enumerate(all_debates):
+        # Reset RNG state per fold so prior trials/folds do not leak into this run.
+        set_random_seed(hparams["seed"] + i)
+
         console.rule(f"Fold {i + 1} for test debate: {test_debate}")
         remaining_debates = [d for d in all_debates if d != test_debate]
         test_size = len(df[df["debate_id"] == test_debate])
@@ -902,7 +929,7 @@ def train_lodo(
                 debates=remaining_debates,
                 debate_weights=debate_weights,
                 batch_size=hparams["batch_size"],
-                num_batches=len(train_data) // hparams["batch_size"],
+                num_batches=ceil(len(train_data) / hparams["batch_size"]),
                 bio_alpha=hparams["bio_alpha"],
                 bio_eps=hparams["bio_eps"],
                 debate_alpha=hparams["debate_alpha"],
@@ -952,6 +979,10 @@ def train_lodo(
             val_loader=val_loader,
             mixed_precision_dtype=mixed_precision_dtype,
         )
+
+        if hparams["crf_priors"]:
+            console.print("Learned CRF transition parameters (with priors):")
+            console.print(model.crf.transitions.clone().detach().cpu().numpy())
 
         # Save the best model state for this debate
         if save and best_model_state is not None and model_output_dir is not None:

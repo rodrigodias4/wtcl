@@ -30,6 +30,8 @@ def collect_model_results(transformer_dir):
         model_dir = transformer_dir / model_name
         if not model_dir.is_dir():
             continue
+        if model_dir.name.startswith("."):
+            continue
 
         if not (model_dir / "results.json").exists():
             console.print(f"Skipping {model_name} as results.json does not exist.")
@@ -62,7 +64,7 @@ def create_val_table():
     table = Table(
         title=f"Model Validation Performance on {dataset_name} Dataset", expand=True
     )
-    table.add_column("Rank", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Rank", justify="right", style="cyan", no_wrap=True, max_width=3)
     table.add_column("Model Name", style="magenta", max_width=32, no_wrap=True)
     table.add_column("M-F1", justify="right", style="green")
     table.add_column("M-A", justify="right", style="green")
@@ -88,7 +90,7 @@ def create_test_table():
     table = Table(
         title=f"Model Test Performance on {dataset_name} Dataset", expand=True
     )
-    table.add_column("Rank", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Rank", justify="right", style="cyan", no_wrap=True, max_width=3)
     table.add_column("Model Name", style="magenta")
     table.add_column("Test Macro F1", justify="right", style="green")
     return table
