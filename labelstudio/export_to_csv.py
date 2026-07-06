@@ -1,7 +1,7 @@
 """Convert a Label Studio JSON export into an annotated speaker-turn CSV.
 
 This emits a schema with:
-    id, debate_id, speaker, text, check_worthy, spans, error
+    id, debate_id, speaker, text, spans, error
 
 Where `spans` is a JSON list of:
     {"start": int, "end": int, "text": str, "reason_text": str, "reason_choices": [str]}
@@ -249,7 +249,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "debate_id": debate_id,
                 "speaker": speaker,
                 "text": text_val,
-                "check_worthy": bool(spans),
                 "spans": json.dumps(
                     [
                         {
@@ -291,7 +290,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "debate_id": row["debate_id"],
                 "speaker": row["speaker"],
                 "text": row["text"],
-                "check_worthy": row["check_worthy"],
                 "spans": row["spans"],
                 "error": row["error"],
             }
@@ -302,7 +300,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "debate_id",
             "speaker",
             "text",
-            "check_worthy",
             "spans",
             "error",
         ],

@@ -37,42 +37,53 @@
 
   <TextArea name="reason" toName="text" perRegion="true" editable="true" required="false" rows="2" placeholder="Optional: why this span is check-worthy / what to fact-check"/>
 
-  <Choices name="reason_choice" toName="text" perRegion="true" choice="multiple" required="true" layout="select">
-    <Choice value="numerical absolute"/>
-    <Choice value="vague quantitative"/>
-    <Choice value="statistic"/>
-    <Choice value="comparative/temporal"/>
+  <Choices name="reason_form" toName="text" perRegion="true" choice="multiple" required="true" layout="select">
+    <Choice value="quantitative precise"/>
+    <Choice value="quantitative approximate"/>
+    <Choice value="quantitative vague"/>
+    <Choice value="non-quantitative fact"/>
+    <Choice value="forecast"/>
+    <Choice value="comparison"/>
+    <Choice value="temporal reference"/>
+    <Choice value="trend/change"/>
     <Choice value="ranking"/>
-    <Choice value="forecast/projection"/>
-    <Choice value="epistemic"/>
     <Choice value="causation"/>
-    <Choice value="attribution"/>
-    <Choice value="stance/support"/>
-    <Choice value="conspiracy"/>
+  </Choices>
+
+  <Choices name="reason_frame" toName="text" perRegion="true" choice="multiple" required="false" layout="select">
+    <Choice value="speech attribution"/>
+    <Choice value="behavioral attribution" />
+    <Choice value="stance"/>
+    <Choice value="epistemic"/>
     <Choice value="anecdote"/>
+    <Choice value="conspiracy"/>
+  </Choices>
+
+  <Choices name="reason_domain" toName="text" perRegion="true" choice="multiple" required="false" layout="select">
     <Choice value="economy"/>
-    <Choice value="science"/>
-    <Choice value="medicine"/>
+    <Choice value="health/medicine"/>
+    <Choice value="science/research"/>
     <Choice value="education"/>
     <Choice value="energy"/>
-    <Choice value="politics"/>
-    <Choice value="geopolitics"/>
+    <Choice value="environment"/>
+    <Choice value="domestic politics"/>
+    <Choice value="international relations"/>
     <Choice value="defense/military"/>
+    <Choice value="war/conflict"/>
     <Choice value="terrorism"/>
-    <Choice value="nuclear warfare"/>
     <Choice value="ethnicity/race"/>
     <Choice value="immigration"/>
     <Choice value="religion"/>
-    <Choice value="crime/law"/>
+    <Choice value="crime"/>
+    <Choice value="justice"/>
+    <Choice value="firearms / gun control"/>
     <Choice value="narcotics"/>
     <Choice value="technology"/>
-    <Choice value="sexual orientation / gender identity"/>
+    <Choice value="LGBTQ+"/>
     <Choice value="gender equality"/>
-    <Choice value="environment"/>
     <Choice value="abortion"/>
     <Choice value="euthanasia"/>
     <Choice value="personal life"/>
-    
     <Choice value="other"/>
   </Choices>
 
