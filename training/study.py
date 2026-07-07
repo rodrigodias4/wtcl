@@ -43,8 +43,7 @@ signal.signal(signal.SIGINT, handle_interrupt)
 # Hyperparameter sampling function
 def sample_hparams(trial: optuna.Trial) -> dict:
     return {
-        "lr": trial.suggest_float("lr", 5e-6, 5e-5, log=True),
-        "batch_size": trial.suggest_categorical("batch_size", [8]),
+        "lr": trial.suggest_float("lr", 5e-6, 1e-4, log=True),
         "weight_decay": trial.suggest_categorical(
             "weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 3e-2, 1e-1]
         ),
@@ -126,6 +125,9 @@ def parse_args() -> argparse.Namespace:
         "--num_epochs", type=int, default=10, help="Number of epochs for training"
     )
     parser.add_argument(
+        "--batch_size", type=int, required=True, help="Batch size for training"
+    )
+    parser.add_argument(
         "--use_crf",
         type=bool,
         default=True,
@@ -168,6 +170,7 @@ def main():
 
     fixed_hparams = {
         "num_epochs": args.num_epochs,
+        "batch_size": args.batch_size,
         "use_crf": True,
         "debate_alpha": DEBATE_TEMPERED_SAMPLING_ALPHA,
         "bio_alpha": BIO_TEMPERED_SAMPLING_ALPHA,

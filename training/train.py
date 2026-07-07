@@ -1,7 +1,6 @@
 import argparse
 import ast
 from collections import defaultdict
-from copy import deepcopy
 from datetime import datetime
 import gc
 import json
@@ -331,6 +330,13 @@ class WTCLModel(nn.Module):
             model_name,
             dtype=torch.float32,
         )
+
+        # Enable gradient checkpointing to save memory
+        if hparams["grad_checkpointing"]:
+            self.transformer.gradient_checkpointing_enable()
+            if hasattr(self.transformer, "enable_input_require_grads"):
+                self.transformer.enable_input_require_grads()
+
         self.transformer.config.hidden_dropout_prob = 0.2
         self.transformer.config.attention_probs_dropout_prob = 0.2
 
@@ -657,7 +663,7 @@ def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> 
     total_loss = 0
     total_sequences = 0
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in dataloader:
             batch_size = batch["input_ids"].size(0)
             input_ids = batch["input_ids"].to(device)
@@ -672,6 +678,8 @@ def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> 
             all_labels.extend(labels.cpu().tolist())
             total_loss += outputs["loss"].item() * batch_size
             total_sequences += batch_size
+
+            del outputs, input_ids, attention_mask, labels
 
     return all_preds, all_labels, total_loss / total_sequences
 
@@ -718,7 +726,7 @@ def train(
 
         progress_task_batches = progress.add_task(f"Batches", total=len(train_loader))
         for batch in train_loader:
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             batch_size = batch["input_ids"].size(0)
 
             input_ids = batch["input_ids"].to(device)
@@ -734,7 +742,11 @@ def train(
                 optimizer.step()
                 scheduler.step()
             elif mixed_precision_dtype == torch.float16:
-                with autocast(device_type="cuda", dtype=mixed_precision_dtype):
+                with autocast(
+                    device_type="cuda",
+                    dtype=mixed_precision_dtype,
+                    cache_enabled=False,
+                ):
                     outputs = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
@@ -751,7 +763,11 @@ def train(
                 if not scale > scaler.get_scale():
                     scheduler.step()
             elif mixed_precision_dtype == torch.bfloat16:
-                with autocast(device_type="cuda", dtype=mixed_precision_dtype):
+                with autocast(
+                    device_type="cuda",
+                    dtype=mixed_precision_dtype,
+                    cache_enabled=False,
+                ):
                     outputs = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
@@ -1321,6 +1337,11 @@ def parse_args() -> argparse.Namespace:
         help="Data type for mixed precision training.",
     )
     parser.add_argument(
+        "--grad_checkpointing",
+        action="store_true",
+        help="Whether to enable gradient checkpointing for memory efficiency.",
+    )
+    parser.add_argument(
         "--comment",
         type=str,
         default="",
@@ -1380,6 +1401,7 @@ def main():
         "crf_priors": args.crf_priors,
         "emission_bias": args.emission_bias,
         "mixed_precision_dtype": args.mixed_precision_dtype,
+        "grad_checkpointing": args.grad_checkpointing,
         "freeze": args.freeze,
         "seed": args.seed,
         "comment": args.comment,
