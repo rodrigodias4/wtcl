@@ -43,7 +43,7 @@ signal.signal(signal.SIGINT, handle_interrupt)
 # Hyperparameter sampling function
 def sample_hparams(trial: optuna.Trial) -> dict:
     return {
-        "lr": trial.suggest_float("lr", 5e-6, 1e-4, log=True),
+        "lr": trial.suggest_float("lr", 5e-6, 5e-5, log=True),
         "weight_decay": trial.suggest_categorical(
             "weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 3e-2, 1e-1]
         ),
@@ -54,9 +54,12 @@ def sample_hparams(trial: optuna.Trial) -> dict:
 
 def callback(study: optuna.Study, trial: optuna.Trial):
     console.print(f"\nTrial {trial.number} finished with value: {trial.value:.1%}")
-    console.print(
-        f"Best trial so far: {study.best_trial.number} with value: {study.best_trial.value:.1%}"
-    )
+    try:
+        console.print(
+            f"Best trial so far: {study.best_trial.number} with value: {study.best_trial.value:.1%}"
+        )
+    except ValueError:
+        console.print("No best trial yet.")
     # Advance the progress bar for hyperparameter tuning trials
     progress.advance(progress_task_trials)
 
@@ -157,6 +160,13 @@ def parse_args() -> argparse.Namespace:
         default=RANDOM_SEED,
         help="Random seed for reproducibility.",
     )
+    parser.add_argument(
+        "--pruner",
+        type=str,
+        default="median",
+        choices=["median", "threshold", "none"],
+        help="Type of pruner to use for Optuna.",
+    )
     # TODO: Add additional hyperparameters
     args = parser.parse_args()
     return args
@@ -180,6 +190,7 @@ def main():
         "freeze": 0,
         "seed": args.seed,
         "mixed_precision_dtype": "bf16",
+        "grad_checkpointing": True,
     }
 
     # Create output directory for the study results
@@ -195,13 +206,27 @@ def main():
     )
     progress.start()
 
+    match args.pruner:
+        case "median":
+            pruner = optuna.pruners.MedianPruner(
+                n_startup_trials=args.n_startup_trials,
+                n_warmup_steps=args.n_warmup_steps,
+            )
+        case "threshold":
+            pruner = optuna.pruners.ThresholdPruner(
+                lower=0.65,
+                n_warmup_steps=args.n_warmup_steps,
+            )
+        case "none":
+            pruner = optuna.pruners.NopPruner()
+        case _:
+            raise ValueError(f"Unsupported pruner type: {args.pruner}")
+
     # Create a new Optuna study for hyperparameter tuning
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
-        pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=args.n_startup_trials, n_warmup_steps=args.n_warmup_steps
-        ),
+        pruner=pruner,
         study_name=study_name,
     )
 

@@ -17,6 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.nn.utils.rnn import pad_sequence
 from torch.amp import autocast, GradScaler
 
 from transformers import (
@@ -377,6 +378,7 @@ class WTCLModel(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor = None,
+        crf_mask: torch.Tensor = None,
     ) -> dict:
         # Get transformer output
         transformer_output = self.transformer(
@@ -394,20 +396,40 @@ class WTCLModel(nn.Module):
         result = {}
 
         if self.use_crf:
-            if labels is not None:
-                # Set padding token labels to 0 for loss computation (ignored in CRF with mask)
-                labels = labels.masked_fill(labels == -100, 0)
+            mask = attention_mask.bool() & crf_mask.bool()
 
-                # Training loss is negative log-likelihood from CRF
-                loss = -self.crf(
-                    logits, labels, mask=attention_mask.bool(), reduction="mean"
+            # Compress sequences to word-level
+            logits_comp = pad_sequence(
+                [logit_seq[mask_seq] for logit_seq, mask_seq in zip(logits, mask)],
+                batch_first=True,
+            )
+
+            lengths = mask.sum(dim=1)
+            mask_comp = torch.arange(lengths.max(), device=mask.device).expand(
+                len(lengths), -1
+            ) < lengths.unsqueeze(1)
+
+            if labels is not None:
+                labels_comp = pad_sequence(
+                    [label_seq[mask_seq] for label_seq, mask_seq in zip(labels, mask)],
+                    batch_first=True,
+                    padding_value=0,  # ignored by the CRF due to mask_comp
                 )
-                result["loss"] = loss
-                del labels
+
+                # Replace any remaining ignore indices (shouldn't normally exist)
+                labels_comp = labels_comp.masked_fill(labels_comp == -100, 0)
+
+                result["loss"] = -self.crf(
+                    logits_comp,
+                    labels_comp,
+                    mask=mask_comp,
+                    reduction="mean",
+                )
 
             if not self.training:
                 result["predictions"] = self.crf.decode(
-                    logits, mask=attention_mask.bool()
+                    logits_comp,
+                    mask=mask_comp,
                 )
         else:
             if labels is not None:
@@ -496,6 +518,45 @@ def encode(
         enc["labels"]
     ), "Input IDs and labels must be the same length"
 
+    # Create a CRF mask to filter non-first subword tokens
+    word_ids = enc.word_ids()
+    crf_mask = []
+    previous_word = None
+
+    for word_id, label in zip(word_ids, labels):
+        if word_id is None:
+            # Special tokens / padding
+            crf_mask.append(False)
+        elif label == B_ID:
+            # Never drop an entity start - had to add this because the CRF mask was dropping B labels in some cases (e.g. weird transcripts where a hyphen was used as a punctuation mark without a space, causing the tokenizer to split the word into subwords)
+            crf_mask.append(True)
+            previous_word = word_id
+        elif word_id != previous_word:
+            # First subword of a word
+            crf_mask.append(True)
+            previous_word = word_id
+        else:
+            # Continuation subword
+            crf_mask.append(False)
+
+    assert len(crf_mask) == len(
+        enc["input_ids"]
+    ), "CRF mask and input IDs must be the same length"
+    enc["crf_mask"] = crf_mask
+
+    tokens = tokenizer.convert_ids_to_tokens(enc["input_ids"])
+
+    """ num_B_before = np.sum(np.array(labels) == B_ID)
+    num_B_after = np.sum((np.array(labels) == B_ID) & np.array(crf_mask))
+    console.print(
+        f"Number of B labels before CRF mask: {num_B_before}, after CRF mask: {num_B_after}"
+    ) """
+    for i, (label, keep) in enumerate(zip(enc["labels"], enc["crf_mask"])):
+        if label == B_ID:
+            assert (
+                keep
+            ), f"CRF mask should keep all B labels, but token {tokens[i]} at position {i} is masked out.\n{[i for i in zip(tokens, enc['labels'], enc['crf_mask'])]}"
+
     return enc
 
 
@@ -526,6 +587,7 @@ class WTCLDataset(Dataset):
         input_ids = torch.tensor(enc["input_ids"], dtype=torch.long)
         attention_mask = torch.tensor(enc["attention_mask"], dtype=torch.long)
         labels = torch.tensor(enc["labels"], dtype=torch.long)
+        crf_mask = torch.tensor(enc["crf_mask"], dtype=torch.bool)
 
         if len(enc["input_ids"]) != len(enc["labels"]):
             # Convert input IDs back to tokens to see what the tokenizer actually did
@@ -545,6 +607,7 @@ class WTCLDataset(Dataset):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
+            "crf_mask": crf_mask,
         }
 
 
@@ -580,15 +643,12 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
     flat_labels = []
 
     for pred, label in zip(preds, labels):
-        # remove padding labels
-        valid_l = [x for x in label if x != -100]
-
         assert len(pred) == len(
-            valid_l
+            label
         ), "Predictions and labels must be the same length after removing padding"
 
         flat_preds.extend(pred)
-        flat_labels.extend(valid_l)
+        flat_labels.extend(label)
 
     preds = np.array(flat_preds)
     labels = np.array(flat_labels)
@@ -669,17 +729,27 @@ def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> 
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
+            crf_mask = batch["crf_mask"].to(device)
 
             outputs = model(
-                input_ids=input_ids, attention_mask=attention_mask, labels=labels
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                crf_mask=crf_mask,
             )
 
             all_preds.extend(outputs["predictions"])
-            all_labels.extend(labels.cpu().tolist())
+
+            labels_masked = [
+                labels_i[mask_i].cpu().tolist()
+                for labels_i, mask_i in zip(labels, crf_mask)
+            ]
+            all_labels.extend(labels_masked)
+
             total_loss += outputs["loss"].item() * batch_size
             total_sequences += batch_size
 
-            del outputs, input_ids, attention_mask, labels
+            del outputs, input_ids, attention_mask, labels, crf_mask
 
     return all_preds, all_labels, total_loss / total_sequences
 
@@ -732,10 +802,14 @@ def train(
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
+            crf_mask = batch["crf_mask"].to(device)
 
             if mixed_precision_dtype is None:
                 outputs = model(
-                    input_ids=input_ids, attention_mask=attention_mask, labels=labels
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                    crf_mask=crf_mask,
                 )
                 loss = outputs["loss"]
                 loss.backward()
@@ -751,6 +825,7 @@ def train(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
+                        crf_mask=crf_mask,
                     )
                     loss = outputs["loss"]
 
@@ -772,6 +847,7 @@ def train(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
+                        crf_mask=crf_mask,
                     )
                     loss = outputs["loss"]
 
@@ -791,11 +867,6 @@ def train(
         progress.remove_task(progress_task_batches)
         training_loss = total_training_loss / total_sequences
         model_results["training_loss"].append(training_loss)
-
-        # Debug learned CRF transition parameters with priors
-        """ assert "crf.transitions" in [name for name, _ in model.named_parameters()]
-        console.print("Learned CRF transition parameters (with priors):")
-        console.print(model.crf.transitions.clone().detach().cpu().numpy()) """
 
         if val_loader is not None:
             preds, labels, val_loss = evaluate(model, val_loader, get_device())
