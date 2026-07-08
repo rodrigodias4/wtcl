@@ -41,6 +41,8 @@ from utils import (
     BIO_TEMPERED_SAMPLING_EPS,
     EMISSION_BIAS_B,
     EMISSION_BIAS_I,
+    LEARNING_RATE_CRF_MULTIPLIER,
+    LEARNING_RATE_FC_MULTIPLIER,
     MODEL_DEFAULT,
     DEBATE_TEMPERED_SAMPLING_ALPHA,
     get_optimizer,
@@ -333,7 +335,7 @@ class WTCLModel(nn.Module):
         )
 
         # Enable gradient checkpointing to save memory
-        if hparams["grad_checkpointing"]:
+        if hparams["gradient_checkpointing"]:
             self.transformer.gradient_checkpointing_enable()
             if hasattr(self.transformer, "enable_input_require_grads"):
                 self.transformer.enable_input_require_grads()
@@ -1328,13 +1330,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a model.")
     parser.add_argument("input_file", type=str, help="Path to input CSV file")
     parser.add_argument(
-        "--dataset_name",
+        "--dataset-name",
         type=str,
         default="",
         help="Name of the dataset (for saving models)",
     )
     parser.add_argument(
-        "--model_name",
+        "--model-name",
         type=str,
         default=MODEL_DEFAULT,
         help="Name of the transformer model to use.",
@@ -1343,43 +1345,56 @@ def parse_args() -> argparse.Namespace:
         "--dropout", type=float, default=0.1, help="Dropout rate for the model."
     )
     parser.add_argument(
-        "--num_epochs", type=int, default=10, help="Number of training epochs."
+        "--num-epochs", type=int, default=10, help="Number of training epochs."
     )
     parser.add_argument(
-        "--batch_size", type=int, default=8, help="Batch size for training."
+        "--batch-size", type=int, default=8, help="Batch size for training."
     )
     parser.add_argument(
-        "--learning_rate",
+        "--learning-rate",
+        "--lr",
         type=float,
         default=2e-5,
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
-        "--warmup_ratio",
+        "--lr-crf-mult",
+        type=float,
+        default=LEARNING_RATE_CRF_MULTIPLIER,
+        help="Learning rate multiplier for the CRF layer (if used).",
+    )
+    parser.add_argument(
+        "--lr-fc-mult",
+        type=float,
+        default=LEARNING_RATE_FC_MULTIPLIER,
+        help="Learning rate multiplier for the fully connected layer (if used).",
+    )
+    parser.add_argument(
+        "--warmup-ratio",
         type=float,
         default=0.1,
         help="Warmup ratio for learning rate scheduler.",
     )
     parser.add_argument(
-        "--weight_decay",
+        "--weight-decay",
         type=float,
         default=0.01,
         help="Weight decay for the optimizer.",
     )
     parser.add_argument(
-        "--debate_alpha",
+        "--debate-alpha",
         type=float,
         default=DEBATE_TEMPERED_SAMPLING_ALPHA,
         help="Tempered sampling alpha for debate sampling.",
     )
     parser.add_argument(
-        "--bio_alpha",
+        "--bio-alpha",
         type=float,
         default=BIO_TEMPERED_SAMPLING_ALPHA,
         help="Tempered sampling alpha for BIO score sampling.",
     )
     parser.add_argument(
-        "--bio_eps",
+        "--bio-eps",
         type=float,
         default=BIO_TEMPERED_SAMPLING_EPS,
         help="Small epsilon to avoid zero probabilities in BIO score sampling.",
@@ -1391,24 +1406,24 @@ def parse_args() -> argparse.Namespace:
         help="Number of initial transformer layers to freeze during training.",
     )
     parser.add_argument(
-        "--crf_priors",
+        "--crf-priors",
         action="store_true",
         help="Whether to use CRF priors for BIO sequence modeling.",
     )
     parser.add_argument(
-        "--emission_bias",
+        "--emission-bias",
         action="store_true",
         help="Whether to use emission bias for CRF layer.",
     )
     parser.add_argument(
-        "--mixed_precision_dtype",
+        "--mixed-precision-dtype",
         type=str,
         choices=["fp16", "bf16", "none"],
         default="bf16",
         help="Data type for mixed precision training.",
     )
     parser.add_argument(
-        "--grad_checkpointing",
+        "--gradient-checkpointing",
         action="store_true",
         help="Whether to enable gradient checkpointing for memory efficiency.",
     )
@@ -1419,7 +1434,7 @@ def parse_args() -> argparse.Namespace:
         help="Optional comment to include in the saved hyperparameters for context.",
     )
     parser.add_argument(
-        "--no_crf",
+        "--no-crf",
         action="store_false",
         help="Whether to disable the CRF layer on top of the transformer model.",
     )
@@ -1463,6 +1478,8 @@ def main():
         "num_epochs": args.num_epochs,
         "batch_size": args.batch_size,
         "lr": args.learning_rate,
+        "lr_fc_mult": args.lr_fc_mult,
+        "lr_crf_mult": args.lr_crf_mult,
         "warmup_ratio": args.warmup_ratio,
         "weight_decay": args.weight_decay,
         "use_crf": args.no_crf,
@@ -1472,7 +1489,7 @@ def main():
         "crf_priors": args.crf_priors,
         "emission_bias": args.emission_bias,
         "mixed_precision_dtype": args.mixed_precision_dtype,
-        "grad_checkpointing": args.grad_checkpointing,
+        "gradient_checkpointing": args.gradient_checkpointing,
         "freeze": args.freeze,
         "seed": args.seed,
         "comment": args.comment,

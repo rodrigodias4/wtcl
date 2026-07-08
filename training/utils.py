@@ -22,6 +22,8 @@ CRF_LEARNING_RATE_MULTIPLIER = 10
 DEBATE_TEMPERED_SAMPLING_ALPHA = 1.0  # 0: Debates are weighted equally / 1: Original
 BIO_TEMPERED_SAMPLING_ALPHA = 0.0  # 0: Original / 1: Linear weighting of BIO
 BIO_TEMPERED_SAMPLING_EPS = 1.0
+LEARNING_RATE_CRF_MULTIPLIER = 10.0
+LEARNING_RATE_FC_MULTIPLIER = 10.0
 
 EMISSION_BIAS_B = 0.75
 EMISSION_BIAS_I = 0.25
@@ -105,12 +107,12 @@ def get_optimizer(model, hparams):
         # FC layer
         {
             "params": decay_group(model.fc),
-            "lr": 1e-3,
+            "lr": hparams["lr"] * hparams["lr_fc_mult"],
             "weight_decay": hparams["weight_decay"],
         },
         {
             "params": no_decay_group(model.fc),
-            "lr": 1e-3,
+            "lr": hparams["lr"] * hparams["lr_fc_mult"],
             "weight_decay": 0.0,
         },
     ]
@@ -119,12 +121,12 @@ def get_optimizer(model, hparams):
             [
                 {
                     "params": decay_group(model.crf),
-                    "lr": 1e-3,
+                    "lr": hparams["lr"] * hparams["lr_crf_mult"],
                     "weight_decay": 0.0,  # IMPORTANT: no decay on CRF
                 },
                 {
                     "params": no_decay_group(model.crf),
-                    "lr": 1e-3,
+                    "lr": hparams["lr"] * hparams["lr_crf_mult"],
                     "weight_decay": 0.0,
                 },
             ]

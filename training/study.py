@@ -49,6 +49,18 @@ def sample_hparams(trial: optuna.Trial) -> dict:
         ),
         "warmup_ratio": trial.suggest_float("warmup_ratio", 0.0, 0.2),
         "dropout": trial.suggest_float("dropout", 0.1, 0.4),
+        "lr_fc_mult": trial.suggest_float(
+            "lr_fc_mult",
+            1,
+            50,
+            log=True,
+        ),
+        "lr_crf_mult": trial.suggest_float(
+            "lr_crf_mult",
+            1,
+            50,
+            log=True,
+        ),
     }
 
 
@@ -190,7 +202,7 @@ def main():
         "freeze": 0,
         "seed": args.seed,
         "mixed_precision_dtype": "bf16",
-        "grad_checkpointing": True,
+        "gradient_checkpointing": True,
     }
 
     # Create output directory for the study results
