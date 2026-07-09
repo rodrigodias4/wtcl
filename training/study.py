@@ -10,6 +10,7 @@ import torch
 import optuna
 
 from train import (
+    PATIENCE,
     RANDOM_SEED,
     print_overall_results,
     set_random_seed,
@@ -125,43 +126,43 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tune hyperparameters for the model.")
     parser.add_argument("input_file", type=str, help="Path to input CSV file")
     parser.add_argument(
-        "--model_name",
+        "--model-name",
         type=str,
         default=MODEL_DEFAULT,
         help="Name of the model to use",
     )
     parser.add_argument(
-        "--num_trials",
+        "--num-trials",
         type=int,
         default=20,
         help="Number of trials for hyperparameter tuning",
     )
     parser.add_argument(
-        "--num_epochs", type=int, default=10, help="Number of epochs for training"
+        "--num-epochs", type=int, default=10, help="Number of epochs for training"
     )
     parser.add_argument(
-        "--batch_size", type=int, required=True, help="Batch size for training"
+        "--batch-size", type=int, required=True, help="Batch size for training"
     )
     parser.add_argument(
-        "--use_crf",
+        "--use-crf",
         type=bool,
         default=True,
         help="Whether to use a CRF layer on top of the transformer model.",
     )
     parser.add_argument(
-        "--starting_hparams",
+        "--starting-hparams",
         type=str,
         default=None,
         help="Path to JSON file with starting hyperparameters for the study.",
     )
     parser.add_argument(
-        "--n_startup_trials",
+        "--num-startup-trials",
         type=int,
         default=5,
         help="Number of startup trials for the Optuna pruner.",
     )
     parser.add_argument(
-        "--n_warmup_steps",
+        "--num-warmup-steps",
         type=int,
         default=2,
         help="Number of warmup steps (folds) for the Optuna pruner.",
@@ -201,6 +202,7 @@ def main():
         "emission_bias": False,
         "freeze": 0,
         "seed": args.seed,
+        "patience": PATIENCE,
         "mixed_precision_dtype": "bf16",
         "gradient_checkpointing": True,
     }
@@ -221,13 +223,13 @@ def main():
     match args.pruner:
         case "median":
             pruner = optuna.pruners.MedianPruner(
-                n_startup_trials=args.n_startup_trials,
-                n_warmup_steps=args.n_warmup_steps,
+                n_startup_trials=args.num_startup_trials,
+                n_warmup_steps=args.num_warmup_steps,
             )
         case "threshold":
             pruner = optuna.pruners.ThresholdPruner(
                 lower=0.65,
-                n_warmup_steps=args.n_warmup_steps,
+                n_warmup_steps=args.num_warmup_steps,
             )
         case "none":
             pruner = optuna.pruners.NopPruner()

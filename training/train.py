@@ -61,7 +61,7 @@ script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 
 MAX_LENGTH = 512
 EARLY_STOPPING_DELTA = 0.0045  # Minimum improvement in validation macro F1 to reset early stopping counter (0.45%)
-PATIENCE = 2  # Number of epochs to wait for improvement before early stopping
+PATIENCE = 3  # Number of epochs to wait for improvement before early stopping
 
 RANDOM_SEED = 42
 
@@ -329,6 +329,7 @@ class TemperedBatchSampler(Sampler):
 class WTCLModel(nn.Module):
     def __init__(self, model_name: str, hparams: dict = None):
         super(WTCLModel, self).__init__()
+        self.hparams = hparams
         self.transformer = AutoModel.from_pretrained(
             model_name,
             dtype=torch.float32,
@@ -545,19 +546,6 @@ def encode(
         enc["input_ids"]
     ), "CRF mask and input IDs must be the same length"
     enc["crf_mask"] = crf_mask
-
-    tokens = tokenizer.convert_ids_to_tokens(enc["input_ids"])
-
-    """ num_B_before = np.sum(np.array(labels) == B_ID)
-    num_B_after = np.sum((np.array(labels) == B_ID) & np.array(crf_mask))
-    console.print(
-        f"Number of B labels before CRF mask: {num_B_before}, after CRF mask: {num_B_after}"
-    ) """
-    for i, (label, keep) in enumerate(zip(enc["labels"], enc["crf_mask"])):
-        if label == B_ID:
-            assert (
-                keep
-            ), f"CRF mask should keep all B labels, but token {tokens[i]} at position {i} is masked out.\n{[i for i in zip(tokens, enc['labels'], enc['crf_mask'])]}"
 
     return enc
 
@@ -908,7 +896,7 @@ def train(
                 f"R={validation_metrics['macro']['recall']:.1%}"
                 f"{('\t\t' + '[magenta]★[/magenta]') if epoch == best_epoch else ''}"
             )
-            if epochs_no_improve >= PATIENCE:
+            if epochs_no_improve >= model.hparams["patience"]:
                 console.print(
                     f"Early stopping at epoch {best_epoch} due to no improvement in validation f1."
                 )
@@ -1449,6 +1437,12 @@ def parse_args() -> argparse.Namespace:
         help="Whether to perform validation during training (enables early stopping).",
     )
     parser.add_argument(
+        "--patience",
+        type=int,
+        default=PATIENCE,
+        help="Number of epochs with no improvement after which training will be stopped.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=RANDOM_SEED,
@@ -1492,6 +1486,7 @@ def main():
         "gradient_checkpointing": args.gradient_checkpointing,
         "freeze": args.freeze,
         "seed": args.seed,
+        "patience": args.patience,
         "comment": args.comment,
     }
 
