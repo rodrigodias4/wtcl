@@ -74,7 +74,6 @@ mp_str_to_dtype = {
     "bf16": torch.bfloat16,
     "none": None,
 }
-scaler = GradScaler()
 
 signal.signal(signal.SIGINT, handle_interrupt)
 
@@ -333,6 +332,8 @@ class WTCLModel(nn.Module):
         self.transformer = AutoModel.from_pretrained(
             model_name,
             dtype=torch.float32,
+            hidden_dropout_prob=0.1,
+            attention_probs_dropout_prob=0.1,
         )
 
         # Enable gradient checkpointing to save memory
@@ -340,9 +341,6 @@ class WTCLModel(nn.Module):
             self.transformer.gradient_checkpointing_enable()
             if hasattr(self.transformer, "enable_input_require_grads"):
                 self.transformer.enable_input_require_grads()
-
-        self.transformer.config.hidden_dropout_prob = 0.2
-        self.transformer.config.attention_probs_dropout_prob = 0.2
 
         # Freeze the first N layers of the transformer if specified in hyperparameters
         for name, param in self.transformer.named_parameters():
@@ -355,9 +353,9 @@ class WTCLModel(nn.Module):
         if hparams["emission_bias"]:
             emission_bias[B_ID] = EMISSION_BIAS_B
             emission_bias[I_ID] = EMISSION_BIAS_I
-        self.emission_bias = torch.tensor(
-            emission_bias, dtype=torch.float32, device=get_device()
-        )
+            self.emission_bias = torch.tensor(
+                emission_bias, dtype=torch.float32, device=get_device()
+            )
 
         hidden_size = self.transformer.config.hidden_size
 
@@ -393,8 +391,13 @@ class WTCLModel(nn.Module):
         # Compute logits
         logits = self.fc(dropout_output)
         del dropout_output
+
         # Add emission bias to logits for CRF
-        logits = logits + self.emission_bias
+        if self.hparams["emission_bias"]:
+            logits = logits + self.emission_bias
+
+        if torch.isnan(logits).any():
+            console.print(f"[WARNING] NaN detected in logits!")
 
         result = {}
 
@@ -407,10 +410,15 @@ class WTCLModel(nn.Module):
                 batch_first=True,
             )
 
+            # Explicitly convert logits to float32 for CRF computations to avoid potential issues with mixed precision
+            logits_comp_fp32 = logits_comp.float()
+            del logits_comp
+
             lengths = mask.sum(dim=1)
             mask_comp = torch.arange(lengths.max(), device=mask.device).expand(
                 len(lengths), -1
             ) < lengths.unsqueeze(1)
+            del lengths
 
             if labels is not None:
                 labels_comp = pad_sequence(
@@ -423,7 +431,7 @@ class WTCLModel(nn.Module):
                 labels_comp = labels_comp.masked_fill(labels_comp == -100, 0)
 
                 result["loss"] = -self.crf(
-                    logits_comp,
+                    logits_comp_fp32,
                     labels_comp,
                     mask=mask_comp,
                     reduction="mean",
@@ -431,9 +439,11 @@ class WTCLModel(nn.Module):
 
             if not self.training:
                 result["predictions"] = self.crf.decode(
-                    logits_comp,
+                    logits_comp_fp32,
                     mask=mask_comp,
                 )
+
+            del logits_comp_fp32, mask_comp, labels_comp, mask
         else:
             if labels is not None:
                 # Compute cross-entropy loss for non-CRF case
@@ -777,6 +787,7 @@ def train(
     best_model_state = None
     validation_preds = []
     validation_labels = []
+    scaler = GradScaler(enabled=(mixed_precision_dtype == torch.float16))
 
     progress_task_epochs = progress.add_task("Training Epochs", total=epochs)
     for epoch in range(1, epochs + 1):
@@ -883,18 +894,19 @@ def train(
                 epochs_no_improve += 1
 
             console.print(
-                f"░░ Epoch {epoch}: "
-                f"TL={training_loss:.2f}, "
-                f"VL={val_loss:.2f}, "
-                f"M-F1={validation_metrics['macro']['f1']:.2%}, "
-                f"B-F1={validation_metrics['B']['f1']:.1%} "
-                f"I-F1={validation_metrics['I']['f1']:.1%} "
-                f"S-F1={validation_metrics['span']['f1']:.1%} "
+                f"{('[magenta]░░ [/magenta]') if epoch == best_epoch else '░░ '}"
+                f"Epoch {(str(epoch) + ":"):<3} "
+                f"TL={training_loss:<6.2f} "
+                f"VL={val_loss:<6.2f} "
+                f"M-F1={validation_metrics['macro']['f1']:<6.2%} "
+                f"B-F1={validation_metrics['B']['f1']:<5.1%} "
+                f"I-F1={validation_metrics['I']['f1']:<5.1%} "
+                f"O-F1={validation_metrics['O']['f1']:<5.1%} "
+                f"S-F1={validation_metrics['span']['f1']:<5.1%} "
                 # f"m-F1={validation_metrics['micro']['f1']:.1%}, "
-                f"A={validation_metrics['macro']['accuracy']:.1%}, "
-                f"P={validation_metrics['macro']['precision']:.1%}, "
-                f"R={validation_metrics['macro']['recall']:.1%}"
-                f"{('\t\t' + '[magenta]★[/magenta]') if epoch == best_epoch else ''}"
+                f"A={validation_metrics['macro']['accuracy']:<5.1%} "
+                f"P={validation_metrics['macro']['precision']:<5.1%} "
+                f"R={validation_metrics['macro']['recall']:<5.1%}"
             )
             if epochs_no_improve >= model.hparams["patience"]:
                 console.print(
@@ -940,6 +952,9 @@ def train_lodo(
 
     console.print(f"Training with model '{model_name}'\nHyperparameters:")
     [console.print(f"‣ {k}: {v}") for k, v in hparams.items()]
+    console.print(
+        f"Tokenizer: {tokenizer.__class__.__name__} | {tokenizer._tokenizer.model.__class__.__name__} | {tokenizer.vocab_size // 1000}K vocab size"
+    )
     console.print(f"Leave-one-debate-out training on {len(all_debates)} debates.")
     console.print(f"Validation enabled: {val}")
 
@@ -1104,6 +1119,7 @@ def train_lodo(
             f"M-F1={test_metrics['macro']['f1']:.2%}, "
             f"B-F1={test_metrics['B']['f1']:.1%}, "
             f"I-F1={test_metrics['I']['f1']:.1%}, "
+            f"O-F1={test_metrics['O']['f1']:.1%}, "
             f"S-F1={span_metrics['f1']:.1%}, "
             f"A={test_metrics['macro']['accuracy']:.1%}, "
             f"P={test_metrics['macro']['precision']:.1%}, "
@@ -1126,6 +1142,17 @@ def train_lodo(
 
             # Check if the trial should be pruned
             if trial.should_prune():
+                trial.set_user_attr(
+                    "partial_trial_data",
+                    {
+                        "hparams": hparams,
+                        "results": results,
+                        "deciding_metric": float(cumulative_mean_macro_f1),
+                        "pruned": True,
+                        "completed_folds": i + 1,
+                        "pruned_on_debate": test_debate,
+                    },
+                )
                 console.print(f"Trial pruned at fold {i + 1} for debate {test_debate}")
                 progress.remove_task(progress_folds)
                 raise TrialPruned()
@@ -1224,6 +1251,7 @@ def print_overall_results(results: dict) -> None:
         f"M-F1={results['overall']['test']['macro']['f1']:.2%}, "
         f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
         f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
+        f"O-F1={results['overall']['test']['O']['f1']:.1%}, "
         f"A={results['overall']['test']['macro']['accuracy']:.1%}, "
         f"P={results['overall']['test']['macro']['precision']:.1%}, "
         f"R={results['overall']['test']['macro']['recall']:.1%}"
@@ -1245,6 +1273,7 @@ def print_overall_results(results: dict) -> None:
             f"M-F1={results['overall']['validation']['macro']['f1']:.1%}, "
             f"B-F1={results['overall']['validation']['B']['f1']:.1%}, "
             f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
+            f"O-F1={results['overall']['validation']['O']['f1']:.1%}, "
             f"S-F1={results['overall']['validation']['span']['f1']:.1%}, "
             f"A={results['overall']['validation']['macro']['accuracy']:.1%}, "
             f"P={results['overall']['validation']['macro']['precision']:.1%}, "

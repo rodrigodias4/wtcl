@@ -3,6 +3,7 @@ from datetime import datetime
 import gc
 import json
 import os
+from pathlib import Path
 import signal
 
 import pandas as pd
@@ -31,8 +32,9 @@ from rich.progress import TaskID
 progress.speed_estimate_period = 60 * 60 * 6  # 6 hours
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 datetime_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-study_trials = {}
 progress_task_trials: TaskID = None
+study_trials = {}
+study_output_dir: Path = None
 
 signal.signal(signal.SIGINT, handle_interrupt)
 
@@ -53,26 +55,53 @@ def sample_hparams(trial: optuna.Trial) -> dict:
         "lr_fc_mult": trial.suggest_float(
             "lr_fc_mult",
             1,
-            50,
+            20,
             log=True,
         ),
         "lr_crf_mult": trial.suggest_float(
             "lr_crf_mult",
             1,
-            50,
+            20,
             log=True,
         ),
     }
 
 
+def save_study_results(study, outdir):
+    study_results = {
+        "best_trial": (
+            {
+                "hparams": study.best_trial.params,
+                "value": study.best_trial.value,
+                "number": study.best_trial.number,
+                "results": study_trials[study.best_trial.number]["results"]["overall"][
+                    "validation"
+                ],
+            }
+            if study.best_trial is not None
+            else None
+        ),
+        "trials": study_trials,
+    }
+    with (outdir / "study_results.json").open("w") as f:
+        json.dump(study_results, f, indent=4)
+
+
 def callback(study: optuna.Study, trial: optuna.Trial):
-    console.print(f"\nTrial {trial.number} finished with value: {trial.value:.1%}")
+    console.print(
+        f"\nTrial {trial.number} finished with value: {f'{trial.value:.1%}' if trial.value is not None else 'n/a'}"
+    )
+
     try:
         console.print(
             f"Best trial so far: {study.best_trial.number} with value: {study.best_trial.value:.1%}"
         )
     except ValueError:
         console.print("No best trial yet.")
+
+    # Save the study results after each trial to ensure progress is not lost
+    save_study_results(study, study_output_dir)
+
     # Advance the progress bar for hyperparameter tuning trials
     progress.advance(progress_task_trials)
 
@@ -88,33 +117,48 @@ def objective(
 
     console.rule(f"Trial {trial.number}", style="bold cyan")
 
-    # Train the model with the current set of hyperparameters and get the fold metrics
-    results, _, _, _, _ = train_lodo(
-        df=df,
-        model_name=model_name,
-        hparams=hparams,
-        val=True,
-        model_output_dir=None,
-        trial=trial,
-    )
+    try:
+        # Train the model with the current set of hyperparameters and get the fold metrics
+        results, _, _, _, _ = train_lodo(
+            df=df,
+            model_name=model_name,
+            hparams=hparams,
+            val=True,
+            model_output_dir=None,
+            trial=trial,
+        )
 
-    print_overall_results(results)
+        print_overall_results(results)
 
-    # Compute the deciding metric (average macro F1 across all debates) for this trial
-    deciding_metric = results["overall"]["validation"]["macro"]["f1"]
+        # Compute the deciding metric (average macro F1 across all debates) for this trial
+        deciding_metric = results["overall"]["validation"]["macro"]["f1"]
 
-    # Store the trial results in the global study_trials dictionary
-    study_trials[trial.number] = {
-        "hparams": hparams,
-        "results": results,
-        "deciding_metric": deciding_metric,
-    }
+        # Store the trial results in the global study_trials dictionary
+        study_trials[trial.number] = {
+            "hparams": hparams,
+            "results": results,
+            "deciding_metric": deciding_metric,
+            "pruned": False,
+        }
 
-    # Free up memory after each trial
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    return deciding_metric
+        return deciding_metric
+    except optuna.exceptions.TrialPruned:
+        # If the trial is pruned, store the partial trial data in the global study_trials dictionary
+        partial_trial_data = trial.user_attrs.get("partial_trial_data")
+        if partial_trial_data is not None:
+            study_trials[trial.number] = partial_trial_data
+        else:
+            study_trials[trial.number] = {
+                "hparams": hparams,
+                "results": {},
+                "deciding_metric": None,
+                "pruned": True,
+            }
+        raise
+    finally:
+        # Free up memory after each trial
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 # ------------------------------------------
@@ -180,13 +224,19 @@ def parse_args() -> argparse.Namespace:
         choices=["median", "threshold", "none"],
         help="Type of pruner to use for Optuna.",
     )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Path to a journal file to resume the study from a previous run.",
+    )
     # TODO: Add additional hyperparameters
     args = parser.parse_args()
     return args
 
 
 def main():
-    global progress_task_trials
+    global progress_task_trials, study_output_dir
     args = parse_args()
     set_random_seed(args.seed)
     study_name = f"study_{args.input_file.split('/')[-1].split('.')[0].split('_')[0]}_{args.model_name.split('/')[-1]}_{datetime_now}"
@@ -207,9 +257,44 @@ def main():
         "gradient_checkpointing": True,
     }
 
-    # Create output directory for the study results
-    study_output_path = script_dir / "studies" / f"{study_name}.json"
-    os.makedirs(study_output_path.parent, exist_ok=True)
+    dataset_name = Path(args.input_file).name.split(".")[0].split("_")[0]
+
+    if args.resume_from:
+        console.print(f"Resuming study from {args.resume_from}")
+        study_output_dir = Path(args.resume_from).parent
+        study_output_path = study_output_dir / "study_results.json"
+        if not study_output_path.is_file():
+            console.print(
+                f"No study_results.json found in {study_output_dir}. Starting fresh."
+            )
+        else:
+            console.print(f"Loading existing study results from {study_output_path}")
+            with study_output_path.open("r") as f:
+                existing_results = json.load(f)
+            for trial_number, trial_data in existing_results["trials"].items():
+                study_trials[int(trial_number)] = trial_data
+    else:
+        # Create output directory for the study results
+        study_output_dir = (
+            Path(os.path.dirname(os.path.abspath(__file__)))
+            / "studies"
+            / dataset_name
+            / args.model_name.split("/")[-1]
+            / datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        )
+
+        study_output_dir.mkdir(exist_ok=True, parents=True)
+        study_output_path = study_output_dir / "study_results.json"
+
+    file_backend = optuna.storages.journal.JournalFileBackend(
+        Path(args.resume_from)
+        if args.resume_from
+        else str(study_output_dir / "study.journal")
+    )
+    storage = optuna.storages.JournalStorage(file_backend)
+    console.print(
+        f"Study journal will be saved to {study_output_dir / 'study.journal'}"
+    )
 
     df = pd.read_csv(args.input_file)
     console.print(f"Loaded {len(df)} rows from {args.input_file}")
@@ -242,6 +327,8 @@ def main():
         sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
         pruner=pruner,
         study_name=study_name,
+        storage=storage,
+        load_if_exists=True,
     )
 
     if args.starting_hparams:
@@ -266,22 +353,8 @@ def main():
     progress.remove_task(progress_task_trials)
     progress.stop()
 
-    with open(study_output_path, "w") as f:
-        json.dump(
-            {
-                "best_trial": {
-                    "hparams": study.best_trial.params,
-                    "value": study.best_trial.value,
-                    "number": study.best_trial.number,
-                    "results": study_trials[study.best_trial.number]["results"][
-                        "overall"
-                    ]["validation"],
-                },
-                "trials": study_trials,
-            },
-            f,
-            indent=4,
-        )
+    save_study_results(study, study_output_dir)
+    console.print(f"Study results saved to {study_output_dir / 'study_results.json'}")
 
     console.rule(f"Study Results")
     console.print(f"Best trial number: {study.best_trial.number}")
