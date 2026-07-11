@@ -125,7 +125,7 @@ def plot_validation_metric_curve_single(
 def plot_validation_metric_curves(results: dict, output_dir: Path):
     console.print("Plotting validation metrics curves...")
     for label in ["macro", "span", "B", "I"]:
-        for metric in ["f1", "accuracy", "precision", "recall"]:
+        for metric in ["f1", "precision", "recall"]:
             plot_validation_metric_curve_single(
                 results, label, metric, output_dir / f"validation_{label}_{metric}.png"
             )

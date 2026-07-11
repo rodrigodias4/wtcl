@@ -12,6 +12,7 @@ import signal
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import classification_report, multilabel_confusion_matrix
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -475,7 +476,12 @@ def get_tokenizer(model_name: str) -> AutoTokenizer:
     @return: AutoTokenizer instance for the specified model.
     """
 
-    return AutoTokenizer.from_pretrained(model_name)
+    return AutoTokenizer.from_pretrained(
+        model_name,
+        add_prefix_space=(
+            model_name.split("/")[-1] in ["roberta-base", "roberta-large"]
+        ),
+    )
 
 
 def encode(
@@ -616,29 +622,16 @@ class WTCLDataset(Dataset):
 # --------------------------------
 
 
-def compute_micro_f1(metrics: dict) -> float:
-    tp = sum([f["precision"] * f["support"] for f in metrics])
-    fp = sum([(1 - f["precision"]) * f["support"] for f in metrics])
-    fn = sum([(1 - f["recall"]) * f["support"] for f in metrics])
-
-    precision = tp / (tp + fp + 1e-9)
-    recall = tp / (tp + fn + 1e-9)
-
-    micro_f1 = (2 * precision * recall) / (precision + recall + 1e-9)
-    return micro_f1
-
-
 def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) -> dict:
     """
-    Compute token-level metrics (F1, precision, recall, accuracy) for each class and overall.
+    Compute token-level metrics (F1, precision, recall) for each class and overall.
 
     @param preds: List of lists of predicted labels for each token.
     @param labels: List of lists of true labels for each token.
     @param num_labels: Number of unique labels/classes.
-    @return: Dictionary containing metrics for each class and aggregations (macro, micro).
+    @return: Dictionary containing metrics for each class and macro average.
     """
 
-    # Pad predictions and labels to the same length
     flat_preds = []
     flat_labels = []
 
@@ -653,49 +646,39 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
     preds = np.array(flat_preds)
     labels = np.array(flat_labels)
 
-    metrics = {}
+    cr = classification_report(
+        labels,
+        preds,
+        labels=list(range(num_labels)),
+        output_dict=True,
+        zero_division=0,
+    )
 
-    # Compute per-class metrics
-    for c in range(num_labels):
-        tp = np.sum((preds == c) & (labels == c))
-        fp = np.sum((preds == c) & (labels != c))
-        fn = np.sum((preds != c) & (labels == c))
-
-        precision = tp / (tp + fp + 1e-9)
-        recall = tp / (tp + fn + 1e-9)
-        accuracy = tp / (tp + fp + fn + 1e-9)
-
-        f1 = (2 * precision * recall) / (precision + recall + 1e-9)
-        metrics[id2label[c]] = {
-            "f1": f1,
-            "precision": precision,
-            "recall": recall,
-            "accuracy": accuracy,
-            "support": int(np.sum(labels == c)),
-        }
-
-    class_metrics = list(metrics.values())
-
-    # Compute macro and micro metrics
-    metrics["macro"] = {
-        "f1": np.mean([m["f1"] for m in class_metrics]),
-        "precision": np.mean([m["precision"] for m in class_metrics]),
-        "recall": np.mean([m["recall"] for m in class_metrics]),
-        "accuracy": np.mean([m["accuracy"] for m in class_metrics]),
-        "support": int(np.sum([m["support"] for m in class_metrics])),
+    return {
+        "macro": {
+            "f1": cr["macro avg"]["f1-score"],
+            "precision": cr["macro avg"]["precision"],
+            "recall": cr["macro avg"]["recall"],
+        },
+        "O": {
+            "f1": cr[str(O_ID)]["f1-score"],
+            "precision": cr[str(O_ID)]["precision"],
+            "recall": cr[str(O_ID)]["recall"],
+            "support": cr[str(O_ID)]["support"],
+        },
+        "B": {
+            "f1": cr[str(B_ID)]["f1-score"],
+            "precision": cr[str(B_ID)]["precision"],
+            "recall": cr[str(B_ID)]["recall"],
+            "support": cr[str(B_ID)]["support"],
+        },
+        "I": {
+            "f1": cr[str(I_ID)]["f1-score"],
+            "precision": cr[str(I_ID)]["precision"],
+            "recall": cr[str(I_ID)]["recall"],
+            "support": cr[str(I_ID)]["support"],
+        },
     }
-    metrics["micro"] = {
-        "f1": compute_micro_f1(class_metrics),
-        "precision": np.sum([m["precision"] * m["support"] for m in class_metrics])
-        / np.sum([m["support"] for m in class_metrics]),
-        "recall": np.sum([m["recall"] * m["support"] for m in class_metrics])
-        / np.sum([m["support"] for m in class_metrics]),
-        "accuracy": np.sum([m["accuracy"] * m["support"] for m in class_metrics])
-        / np.sum([m["support"] for m in class_metrics]),
-        "support": int(np.sum([m["support"] for m in class_metrics])),
-    }
-
-    return metrics
 
 
 # ---------------------------------
@@ -903,8 +886,6 @@ def train(
                 f"I-F1={validation_metrics['I']['f1']:<5.1%} "
                 f"O-F1={validation_metrics['O']['f1']:<5.1%} "
                 f"S-F1={validation_metrics['span']['f1']:<5.1%} "
-                # f"m-F1={validation_metrics['micro']['f1']:.1%}, "
-                f"A={validation_metrics['macro']['accuracy']:<5.1%} "
                 f"P={validation_metrics['macro']['precision']:<5.1%} "
                 f"R={validation_metrics['macro']['recall']:<5.1%}"
             )
@@ -953,7 +934,7 @@ def train_lodo(
     console.print(f"Training with model '{model_name}'\nHyperparameters:")
     [console.print(f"‣ {k}: {v}") for k, v in hparams.items()]
     console.print(
-        f"Tokenizer: {tokenizer.__class__.__name__} | {tokenizer._tokenizer.model.__class__.__name__} | {tokenizer.vocab_size // 1000}K vocab size"
+        f"Tokenizer: {tokenizer.__class__.__name__} | {tokenizer._tokenizer.model.__class__.__name__} | {tokenizer.vocab_size // 1000}K vocab size | is_fast={tokenizer.is_fast} | add_prefix_space={tokenizer.add_prefix_space}"
     )
     console.print(f"Leave-one-debate-out training on {len(all_debates)} debates.")
     console.print(f"Validation enabled: {val}")
@@ -1121,7 +1102,6 @@ def train_lodo(
             f"I-F1={test_metrics['I']['f1']:.1%}, "
             f"O-F1={test_metrics['O']['f1']:.1%}, "
             f"S-F1={span_metrics['f1']:.1%}, "
-            f"A={test_metrics['macro']['accuracy']:.1%}, "
             f"P={test_metrics['macro']['precision']:.1%}, "
             f"R={test_metrics['macro']['recall']:.1%}"
         )
@@ -1202,13 +1182,13 @@ def train_lodo(
     )
 
     # Compute average metrics across debates for each label and metric
-    for label in ["macro", "micro", "span", "B", "I", "O"]:
+    for label in ["macro", "span", "B", "I", "O"]:
         # Initialize overall metrics dictionaries for each label
         results["overall"]["test"][label] = {}
         if val:
             results["overall"]["validation"][label] = {}
 
-        for metric in ["f1", "precision", "recall", "accuracy"]:
+        for metric in ["f1", "precision", "recall"]:
             # Compute average test metric across debates for the current label and metric
             results["overall"]["test"][label][metric] = np.mean(
                 [
@@ -1252,7 +1232,6 @@ def print_overall_results(results: dict) -> None:
         f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
         f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
         f"O-F1={results['overall']['test']['O']['f1']:.1%}, "
-        f"A={results['overall']['test']['macro']['accuracy']:.1%}, "
         f"P={results['overall']['test']['macro']['precision']:.1%}, "
         f"R={results['overall']['test']['macro']['recall']:.1%}"
     )
@@ -1275,7 +1254,6 @@ def print_overall_results(results: dict) -> None:
             f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
             f"O-F1={results['overall']['validation']['O']['f1']:.1%}, "
             f"S-F1={results['overall']['validation']['span']['f1']:.1%}, "
-            f"A={results['overall']['validation']['macro']['accuracy']:.1%}, "
             f"P={results['overall']['validation']['macro']['precision']:.1%}, "
             f"R={results['overall']['validation']['macro']['recall']:.1%}"
         )
