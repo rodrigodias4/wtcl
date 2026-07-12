@@ -1269,7 +1269,6 @@ def print_overall_results(results: dict) -> None:
         f"F1={results['overall']['test']['span']['f1']:.1%}, "
         f"P={results['overall']['test']['span']['precision']:.1%}, "
         f"R={results['overall']['test']['span']['recall']:.1%}, "
-        f"A={results['overall']['test']['span']['accuracy']:.1%}"
     )
 
     # Print overall token-level validation metrics
@@ -1287,6 +1286,7 @@ def print_overall_results(results: dict) -> None:
             f"I-R={results['overall']['validation']['I']['recall']:.1%}, "
             f"O-F1={results['overall']['validation']['O']['f1']:.1%}, "
             f"S-F1={results['overall']['validation']['span']['f1']:.1%}, "
+            f"J={results['overall']['validation']['macro']['jaccard']:.1%}"
         )
 
 

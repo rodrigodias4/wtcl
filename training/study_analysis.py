@@ -31,6 +31,9 @@ def plot_result_per_trial(study_results, outdir):
             if trial_results.get("pruned") is None or trial_results["pruned"] is False
             else trial_results["completed_folds"]
         )
+    max_objective_value_at_trial = [
+        max(objective_values[: i + 1]) for i in range(len(objective_values))
+    ]
 
     # Create a scatter plot of the results
     plt.figure(figsize=(10, 6))
@@ -38,22 +41,28 @@ def plot_result_per_trial(study_results, outdir):
         trial_numbers,
         objective_values,
         c=num_completed_folds,
-        cmap=cmaps.bubblegum,
-        vmin=0,
+        cmap=cmaps.bubblegum.reversed(),
+        vmin=study_results.get("pruner", {}).get("n_warmup_steps", 0) + 1,
         vmax=7,
         label="Objective Value",
+        zorder=2,
+    )
+
+    # Add a line plot for the maximum objective value at each trial
+    max_at_trial = plt.step(
+        trial_numbers,
+        max_objective_value_at_trial,
+        color="red",
+        alpha=0.2,
+        linestyle="--",
+        label="Running Max Objective Value",
+        zorder=1,
     )
 
     # Add the colorbar corresponding to the scatter plot colors
     cbar = plt.colorbar(scatter)
     cbar.set_label("Number of Completed Folds", rotation=270, labelpad=15)
-
-    plt.ylim(0, 1)
-    plt.yticks(np.arange(0, 1.1, 0.1))
-    plt.title("Study Results per Trial")
-    plt.xlabel("Trial Number")
-    plt.ylabel("Macro F1")
-    plt.grid(True, alpha=0.3)
+    cbar.set_ticks(np.arange(cbar.vmin, cbar.vmax + 1, 1))
 
     # Shade startup trials region
     n_startup_trials = study_results.get("pruner", {}).get("n_startup_trials", 0)
@@ -75,6 +84,14 @@ def plot_result_per_trial(study_results, outdir):
             fontsize=8,
             color="black",
         )
+
+    plt.ylim(0, 1)
+    plt.yticks(np.arange(0, 1.1, 0.1))
+    plt.title("Study Results per Trial")
+    plt.xlabel("Trial Number")
+    plt.ylabel("Macro F1")
+    plt.grid(True, alpha=0.3)
+    plt.legend(handles=[max_at_trial[0]])
 
     # Save the plot to the output directory
     plot_path = outdir / "objective_value_per_trial.png"
@@ -108,8 +125,8 @@ def plot_result_per_hparam(study_results, outdir):
             hparam_values,
             objective_values,
             c=num_completed_folds,
-            cmap=cmaps.bubblegum,
-            vmin=0,
+            cmap=cmaps.bubblegum.reversed(),
+            vmin=study_results.get("pruner", {}).get("n_warmup_steps", 0) + 1,
             vmax=7,
             label="Objective Value",
         )
@@ -117,6 +134,7 @@ def plot_result_per_hparam(study_results, outdir):
         # Add the colorbar corresponding to the scatter plot colors
         cbar = plt.colorbar(scatter)
         cbar.set_label("Number of Completed Folds", rotation=270, labelpad=15)
+        cbar.set_ticks(np.arange(cbar.vmin, cbar.vmax + 1, 1))
 
         if hparam == "lr":
             plt.xscale("log")

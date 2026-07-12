@@ -72,8 +72,8 @@ def save_study_results(study, outdir):
         "study_name": study.study_name,
         "pruner": {
             "name": study.pruner.__class__.__name__,
-            "n_startup_trials": getattr(study.pruner, "n_startup_trials", None),
-            "n_warmup_steps": getattr(study.pruner, "n_warmup_steps", None),
+            "n_startup_trials": getattr(study.pruner, "_n_startup_trials", None),
+            "n_warmup_steps": getattr(study.pruner, "_n_warmup_steps", None),
         },
         "best_trial": (
             {
@@ -236,6 +236,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to a journal file to resume the study from a previous run.",
     )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action="store_true",
+        help="Enable gradient checkpointing to save memory during training.",
+    )
     # TODO: Add additional hyperparameters
     args = parser.parse_args()
     return args
@@ -260,7 +265,7 @@ def main():
         "seed": args.seed,
         "patience": PATIENCE,
         "mixed_precision_dtype": "bf16",
-        "gradient_checkpointing": True,
+        "gradient_checkpointing": args.gradient_checkpointing,
     }
 
     dataset_name = Path(args.input_file).name.split(".")[0].split("_")[0]
@@ -303,6 +308,9 @@ def main():
     console.print(
         f"Study journal will be saved to {study_output_dir / 'study.journal'}"
     )
+    console.print(
+        f"Study results will be saved to {study_output_dir / 'study_results.json'}"
+    )
 
     df = pd.read_csv(args.input_file)
     console.print(f"Loaded {len(df)} rows from {args.input_file}")
@@ -313,6 +321,7 @@ def main():
     )
     progress.start()
 
+    # Create the Optuna pruner based on the specified type
     match args.pruner:
         case "median":
             pruner = optuna.pruners.MedianPruner(
@@ -328,6 +337,12 @@ def main():
             pruner = optuna.pruners.NopPruner()
         case _:
             raise ValueError(f"Unsupported pruner type: {args.pruner}")
+
+    console.print(
+        f"Using {pruner.__class__.__name__} for pruning trials: "
+        f"N startup trials: {getattr(pruner, '_n_startup_trials', 'N/A')}, "
+        f"N warmup steps: {getattr(pruner, '_n_warmup_steps', 'N/A')}"
+    )
 
     # Create a new Optuna study for hyperparameter tuning
     study = optuna.create_study(
