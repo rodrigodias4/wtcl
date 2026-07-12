@@ -66,19 +66,17 @@ def create_val_table():
     )
     table.add_column("Rank", justify="right", style="cyan", no_wrap=True, max_width=3)
     table.add_column("Model Name", style="magenta", max_width=32, no_wrap=True)
-    table.add_column("M-F1", justify="right", style="green")
-    table.add_column("M-A", justify="right", style="green")
-    table.add_column("M-P", justify="right", style="green")
-    table.add_column("M-R", justify="right", style="green")
+    table.add_column("F1", justify="right", style="green")
+    table.add_column("P", justify="right", style="green")
+    table.add_column("R", justify="right", style="green")
     table.add_column("B-F1", justify="right", style="green")
-    table.add_column("B-A", justify="right", style="green")
     table.add_column("B-P", justify="right", style="green")
     table.add_column("B-R", justify="right", style="green")
     table.add_column("I-F1", justify="right", style="green")
-    table.add_column("I-A", justify="right", style="green")
     table.add_column("I-P", justify="right", style="green")
     table.add_column("I-R", justify="right", style="green")
     table.add_column("S-F1", justify="right", style="green")
+    table.add_column("Jacc", justify="right", style="green")
 
     return table
 
@@ -114,6 +112,11 @@ def fill_val_table(table, models_ranked_by_validation):
             (
                 f"{(model['validation']['span']['f1'] * 100):.2f}"
                 if "span" in model["validation"]
+                else "N/A"
+            ),
+            (
+                f"{(model['validation']['macro']['jaccard'] * 100):.2f}"
+                if "jaccard" in model["validation"]["macro"]
                 else "N/A"
             ),
         )

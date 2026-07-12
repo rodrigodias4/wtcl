@@ -1221,8 +1221,16 @@ def train_lodo(
                         for debate in all_debates
                     ]
                 )
-    results["overall"]["test"]["span"] = compute_metrics_span_level(
-        all_test_preds, all_test_labels
+
+    # Jaccard score is only computed for the macro label, so we compute it separately
+    results["overall"]["validation"]["macro"]["jaccard"] = np.mean(
+        [
+            results[debate]["best_validation_metrics"]["macro"]["jaccard"]
+            for debate in all_debates
+        ]
+    )
+    results["overall"]["test"]["macro"]["jaccard"] = np.mean(
+        [results[debate]["test_metrics"]["macro"]["jaccard"] for debate in all_debates]
     )
 
     return (
