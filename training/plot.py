@@ -25,6 +25,10 @@ def plot_validation_metric_curve_single(
     for i, (model_name, model_results) in enumerate(results.items()):
         if model_name == "overall":
             continue  # Skip overall for plotting
+        if model_results["validation_metrics"][0].get(label) is None:
+            return  # Skip if the label is not present in the validation metrics
+        if model_results["validation_metrics"][0][label].get(metric) is None:
+            return  # Skip if the metric is not present in the validation metrics
         epochs = range(
             1, model_results["best_epoch"] + 1
         )  # +1 to include the best epoch
@@ -125,9 +129,12 @@ def plot_validation_metric_curve_single(
 def plot_validation_metric_curves(results: dict, output_dir: Path):
     console.print("Plotting validation metrics curves...")
     for label in ["macro", "span", "B", "I"]:
-        for metric in ["f1", "precision", "recall"]:
+        for metric in ["f1", "precision", "recall", "jaccard"]:
             plot_validation_metric_curve_single(
-                results, label, metric, output_dir / f"validation_{label}_{metric}.png"
+                results,
+                label,
+                metric,
+                output_dir / f"validation_{label}_{metric}.png",
             )
 
 

@@ -10,7 +10,10 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
 import argparse
-from seqeval.metrics import accuracy_score, classification_report
+from seqeval.metrics import (
+    accuracy_score,
+    classification_report as seqeval_classification_report,
+)
 
 
 def plot_confusion_matrix(
@@ -89,7 +92,7 @@ def compute_metrics_span_level(all_preds: list, all_labels: list) -> dict:
         ]  # Convert prediction IDs to label names
 
     # Exact match evaluation using seqeval
-    report = classification_report(
+    report = seqeval_classification_report(
         all_labels, all_preds, output_dict=True, zero_division=0
     )
     accuracy = accuracy_score(all_labels, all_preds)

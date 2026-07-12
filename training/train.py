@@ -12,7 +12,7 @@ import signal
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import classification_report, multilabel_confusion_matrix
+from sklearn.metrics import classification_report, jaccard_score
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -69,6 +69,10 @@ RANDOM_SEED = 42
 B_ID = label2id["B"]
 I_ID = label2id["I"]
 O_ID = label2id["O"]
+
+B_ID_str = str(B_ID)
+I_ID_str = str(I_ID)
+O_ID_str = str(O_ID)
 
 mp_str_to_dtype = {
     "fp16": torch.float16,
@@ -659,24 +663,25 @@ def compute_metrics_token_level(preds: list, labels: list, num_labels: int = 3) 
             "f1": cr["macro avg"]["f1-score"],
             "precision": cr["macro avg"]["precision"],
             "recall": cr["macro avg"]["recall"],
+            "jaccard": jaccard_score(labels, preds, average="macro"),
         },
         "O": {
-            "f1": cr[str(O_ID)]["f1-score"],
-            "precision": cr[str(O_ID)]["precision"],
-            "recall": cr[str(O_ID)]["recall"],
-            "support": cr[str(O_ID)]["support"],
+            "f1": cr[O_ID_str]["f1-score"],
+            "precision": cr[O_ID_str]["precision"],
+            "recall": cr[O_ID_str]["recall"],
+            "support": cr[O_ID_str]["support"],
         },
         "B": {
-            "f1": cr[str(B_ID)]["f1-score"],
-            "precision": cr[str(B_ID)]["precision"],
-            "recall": cr[str(B_ID)]["recall"],
-            "support": cr[str(B_ID)]["support"],
+            "f1": cr[B_ID_str]["f1-score"],
+            "precision": cr[B_ID_str]["precision"],
+            "recall": cr[B_ID_str]["recall"],
+            "support": cr[B_ID_str]["support"],
         },
         "I": {
-            "f1": cr[str(I_ID)]["f1-score"],
-            "precision": cr[str(I_ID)]["precision"],
-            "recall": cr[str(I_ID)]["recall"],
-            "support": cr[str(I_ID)]["support"],
+            "f1": cr[I_ID_str]["f1-score"],
+            "precision": cr[I_ID_str]["precision"],
+            "recall": cr[I_ID_str]["recall"],
+            "support": cr[I_ID_str]["support"],
         },
     }
 
@@ -881,13 +886,18 @@ def train(
                 f"Epoch {(str(epoch) + ":"):<3} "
                 f"TL={training_loss:<6.2f} "
                 f"VL={val_loss:<6.2f} "
-                f"M-F1={validation_metrics['macro']['f1']:<6.2%} "
+                f"F1={validation_metrics['macro']['f1']:<6.2%} "
+                f"P={validation_metrics['macro']['precision']:<5.1%} "
+                f"R={validation_metrics['macro']['recall']:<5.1%} "
                 f"B-F1={validation_metrics['B']['f1']:<5.1%} "
+                f"B-P={validation_metrics['B']['precision']:<5.1%} "
+                f"B-R={validation_metrics['B']['recall']:<5.1%} "
                 f"I-F1={validation_metrics['I']['f1']:<5.1%} "
+                f"I-P={validation_metrics['I']['precision']:<5.1%} "
+                f"I-R={validation_metrics['I']['recall']:<5.1%} "
                 f"O-F1={validation_metrics['O']['f1']:<5.1%} "
                 f"S-F1={validation_metrics['span']['f1']:<5.1%} "
-                f"P={validation_metrics['macro']['precision']:<5.1%} "
-                f"R={validation_metrics['macro']['recall']:<5.1%}"
+                f"J={validation_metrics['macro']['jaccard']:<5.1%}"
             )
             if epochs_no_improve >= model.hparams["patience"]:
                 console.print(
@@ -1097,13 +1107,18 @@ def train_lodo(
         # Print test metrics for the current debate
         console.print(
             f"Test | "
-            f"M-F1={test_metrics['macro']['f1']:.2%}, "
-            f"B-F1={test_metrics['B']['f1']:.1%}, "
-            f"I-F1={test_metrics['I']['f1']:.1%}, "
-            f"O-F1={test_metrics['O']['f1']:.1%}, "
-            f"S-F1={span_metrics['f1']:.1%}, "
-            f"P={test_metrics['macro']['precision']:.1%}, "
-            f"R={test_metrics['macro']['recall']:.1%}"
+            f"F1={test_metrics['macro']['f1']:.2%} "
+            f"P={test_metrics['macro']['precision']:.1%} "
+            f"R={test_metrics['macro']['recall']:.1%} "
+            f"B-F1={test_metrics['B']['f1']:.1%} "
+            f"B-P={test_metrics['B']['precision']:.1%} "
+            f"B-R={test_metrics['B']['recall']:.1%} "
+            f"I-F1={test_metrics['I']['f1']:.1%} "
+            f"I-P={test_metrics['I']['precision']:.1%} "
+            f"I-R={test_metrics['I']['recall']:.1%} "
+            f"O-F1={test_metrics['O']['f1']:.1%} "
+            f"S-F1={span_metrics['f1']:.1%} "
+            f"J={test_metrics['macro']['jaccard']:.1%}"
         )
 
         # Report to Optuna trial if provided
@@ -1228,12 +1243,16 @@ def print_overall_results(results: dict) -> None:
     # Print overall token-level test metrics
     console.print(
         f"\nOverall test metrics: "
-        f"M-F1={results['overall']['test']['macro']['f1']:.2%}, "
-        f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
-        f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
-        f"O-F1={results['overall']['test']['O']['f1']:.1%}, "
+        f"F1={results['overall']['test']['macro']['f1']:.2%}, "
         f"P={results['overall']['test']['macro']['precision']:.1%}, "
         f"R={results['overall']['test']['macro']['recall']:.1%}"
+        f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
+        f"B-P={results['overall']['test']['B']['precision']:.1%}, "
+        f"B-R={results['overall']['test']['B']['recall']:.1%}"
+        f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
+        f"I-P={results['overall']['test']['I']['precision']:.1%}, "
+        f"I-R={results['overall']['test']['I']['recall']:.1%}"
+        f"O-F1={results['overall']['test']['O']['f1']:.1%}, "
     )
 
     # Print overall span-level test metrics
@@ -1249,13 +1268,17 @@ def print_overall_results(results: dict) -> None:
     if results["overall"].get("validation") is not None:
         console.print(
             f"Overall validation metrics: "
-            f"M-F1={results['overall']['validation']['macro']['f1']:.1%}, "
-            f"B-F1={results['overall']['validation']['B']['f1']:.1%}, "
-            f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
-            f"O-F1={results['overall']['validation']['O']['f1']:.1%}, "
-            f"S-F1={results['overall']['validation']['span']['f1']:.1%}, "
+            f"F1={results['overall']['validation']['macro']['f1']:.1%}, "
             f"P={results['overall']['validation']['macro']['precision']:.1%}, "
             f"R={results['overall']['validation']['macro']['recall']:.1%}"
+            f"B-F1={results['overall']['validation']['B']['f1']:.1%}, "
+            f"B-P={results['overall']['validation']['B']['precision']:.1%}, "
+            f"B-R={results['overall']['validation']['B']['recall']:.1%}, "
+            f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
+            f"I-P={results['overall']['validation']['I']['precision']:.1%}, "
+            f"I-R={results['overall']['validation']['I']['recall']:.1%}, "
+            f"O-F1={results['overall']['validation']['O']['f1']:.1%}, "
+            f"S-F1={results['overall']['validation']['span']['f1']:.1%}, "
         )
 
 

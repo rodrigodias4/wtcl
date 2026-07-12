@@ -55,13 +55,13 @@ def sample_hparams(trial: optuna.Trial) -> dict:
         "lr_fc_mult": trial.suggest_float(
             "lr_fc_mult",
             1,
-            20,
+            50,
             log=True,
         ),
         "lr_crf_mult": trial.suggest_float(
             "lr_crf_mult",
             1,
-            20,
+            50,
             log=True,
         ),
     }
@@ -69,6 +69,12 @@ def sample_hparams(trial: optuna.Trial) -> dict:
 
 def save_study_results(study, outdir):
     study_results = {
+        "study_name": study.study_name,
+        "pruner": {
+            "name": study.pruner.__class__.__name__,
+            "n_startup_trials": getattr(study.pruner, "n_startup_trials", None),
+            "n_warmup_steps": getattr(study.pruner, "n_warmup_steps", None),
+        },
         "best_trial": (
             {
                 "hparams": study.best_trial.params,
@@ -273,6 +279,8 @@ def main():
                 existing_results = json.load(f)
             for trial_number, trial_data in existing_results["trials"].items():
                 study_trials[int(trial_number)] = trial_data
+
+            study_name = existing_results.get("study_name", study_name)
     else:
         # Create output directory for the study results
         study_output_dir = (
@@ -287,8 +295,8 @@ def main():
         study_output_path = study_output_dir / "study_results.json"
 
     file_backend = optuna.storages.journal.JournalFileBackend(
-        Path(args.resume_from)
-        if args.resume_from
+        str(Path(args.resume_from))
+        if args.resume_from and Path(args.resume_from).is_file()
         else str(study_output_dir / "study.journal")
     )
     storage = optuna.storages.JournalStorage(file_backend)
@@ -330,6 +338,15 @@ def main():
         storage=storage,
         load_if_exists=True,
     )
+
+    if args.resume_from:
+        console.print(
+            f"Loaded study '{study.study_name}' with {len(study.get_trials(deepcopy=False))} existing trials."
+        )
+        if study.best_trial is not None:
+            console.print(
+                f"Best trial so far: {study.best_trial.number} with value: {study.best_trial.value:.1%}"
+            )
 
     if args.starting_hparams:
         with open(args.starting_hparams, "r") as f:

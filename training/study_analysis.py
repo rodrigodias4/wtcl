@@ -55,6 +55,27 @@ def plot_result_per_trial(study_results, outdir):
     plt.ylabel("Macro F1")
     plt.grid(True, alpha=0.3)
 
+    # Shade startup trials region
+    n_startup_trials = study_results.get("pruner", {}).get("n_startup_trials", 0)
+    if n_startup_trials > 0:
+        plt.axvspan(
+            0,
+            n_startup_trials - 1,
+            color="lightgray",
+            alpha=0.5,
+            label="Startup Trials",
+            zorder=0,
+        )
+        plt.text(
+            (n_startup_trials - 1) / 2,
+            0.95,
+            "Startup Trials",
+            horizontalalignment="center",
+            verticalalignment="center",
+            fontsize=8,
+            color="black",
+        )
+
     # Save the plot to the output directory
     plot_path = outdir / "objective_value_per_trial.png"
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
