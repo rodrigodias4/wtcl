@@ -22,6 +22,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.amp import autocast, GradScaler
 
 from transformers import (
+    AutoConfig,
     AutoModel,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
@@ -337,11 +338,25 @@ class WTCLModel(nn.Module):
     def __init__(self, model_name: str, hparams: dict = None):
         super(WTCLModel, self).__init__()
         self.hparams = hparams
+
+        config = AutoConfig.from_pretrained(model_name)
+        transformer_dropout = 0.1
+        dropout_attributes = [
+            "hidden_dropout_prob",
+            "hidden_dropout",
+            "attention_probs_dropout_prob",
+            "attention_dropout",
+            "dropout",
+            "resid_pdrop",
+        ]
+        for attr in dropout_attributes:
+            if hasattr(config, attr):
+                setattr(config, attr, transformer_dropout)
+
         self.transformer = AutoModel.from_pretrained(
             model_name,
+            config=config,
             dtype=torch.float32,
-            hidden_dropout_prob=0.1,
-            attention_probs_dropout_prob=0.1,
         )
 
         # Enable gradient checkpointing to save memory
@@ -981,27 +996,33 @@ def train_lodo(
 
         console.rule(f"Fold {i + 1} for test debate: {test_debate}")
         remaining_debates = [d for d in all_debates if d != test_debate]
-        test_size = len(df[df["debate_id"] == test_debate])
+        # Create test split dataset and dataloader
+        test_data = df[df["debate_id"] == test_debate].drop_duplicates(
+            subset=["id", "chunk_id"]
+        )  # Ensure unique sequences in test set (no oversampling)
 
         # Split the data into training, validation, and test sets
         if val:
             val_debate = get_validation_debate(df, remaining_debates)
-            val_data = df[df["debate_id"] == val_debate]
+            val_data = df[df["debate_id"] == val_debate].drop_duplicates(
+                subset=["id", "chunk_id"]
+            )  # Ensure unique sequences in validation set (no oversampling)
             train_data = df[~df["debate_id"].isin([test_debate, val_debate])]
-            # assert (
-            #     not train_data["debate_id"].isin([test_debate, val_debate]).any()
-            # ), "Training debates should not include test or validation debate"
+
+            total_size = len(train_data) + len(val_data) + len(test_data)
+
             console.print(f"Validating on debate: {val_debate}")
             console.print(
-                f"Split sizes: {len(train_data)} - {len(val_data)} - {test_size} // {len(train_data)/len(df):.1%} - {len(val_data)/len(df):.1%} - {test_size/len(df):.1%}"
+                f"Split sizes: {len(train_data)} - {len(val_data)} - {len(test_data)} // {len(train_data)/total_size:.1%} - {len(val_data)/total_size:.1%} - {len(test_data)/total_size:.1%}"
             )
         else:
             train_data = df[df["debate_id"] != test_debate]
+            total_size = len(train_data) + len(test_data)
             # assert not (
             #     train_data["debate_id"] == test_debate
             # ).any(), "Training debates should not include test debate"
             console.print(
-                f"Split sizes: {len(train_data)} - {test_size} // {len(train_data)/len(df):.1%} - {test_size/len(df):.1%}"
+                f"Split sizes: {len(train_data)} - {len(test_data)} // {len(train_data)/total_size:.1%} - {len(test_data)/total_size:.1%}"
             )
 
         # Debate-level weighted sampling setup
@@ -1081,8 +1102,6 @@ def train_lodo(
             with (model_output_dir / "folds" / f"{test_debate}.pt").open("wb") as f:
                 torch.save(best_model_state, f)
 
-        # Create test split dataset and dataloader
-        test_data = df[df["debate_id"] == test_debate]
         test_dataset = WTCLDataset(test_data.to_dict("records"), tokenizer, MAX_LENGTH)
         test_loader = DataLoader(
             test_dataset, batch_size=hparams["batch_size"], shuffle=False

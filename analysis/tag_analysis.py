@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -60,13 +61,18 @@ def encode(
 def _get_tag_counts(df):
     # Dictionary: debate_id -> Counter
     debate_counts = defaultdict(Counter)
+    claims_per_turn = defaultdict(int)
 
     # Iterate rows
     for _, row in df.iterrows():
-        bio_tags = encode(row["text"], eval(row["spans"]), tokenizer)
+        spans: list[dict] = ast.literal_eval(row["spans"])
+        bio_tags = encode(row["text"], spans, tokenizer)
 
         # Count tags in this row and accumulate
         debate_counts[row["debate_id"]].update(bio_tags)
+
+        # Count claims per turn
+        claims_per_turn[len(spans)] = claims_per_turn.get(len(spans), 0) + 1
 
     # Convert to DataFrame
     plot_data = pd.DataFrame.from_dict(debate_counts, orient="index").fillna(0)
@@ -82,7 +88,7 @@ def _get_tag_counts(df):
     # Sort by debate date (optional)
     plot_data = plot_data.sort_index()
 
-    return plot_data
+    return plot_data, claims_per_turn
 
 
 def plot_tag_distribution(plot_data: pd.DataFrame, output_dir: Path):
@@ -125,9 +131,24 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(args.input_file)
-    plot_data = _get_tag_counts(df)
+    plot_data, claims_per_turn = _get_tag_counts(df)
     console.print(f"Tag counts per debate:\n{plot_data}")
     plot_tag_distribution(plot_data, outdir)
+
+    claims_per_turn_sorted = {
+        k: v for k, v in sorted(claims_per_turn.items(), key=lambda item: item[0])
+    }
+    console.print(f"Claims per turn:\n{json.dumps(claims_per_turn_sorted, indent=4)}")
+
+    turns_with_no_claims = claims_per_turn.get(0, 0)
+    console.print(
+        f"Turns with no claims: {turns_with_no_claims} ({(turns_with_no_claims / len(df)):.1%})"
+    )
+
+    turn_with_at_least_one_claim = sum(v for k, v in claims_per_turn.items() if k > 0)
+    console.print(
+        f"Turns with at least one claim: {turn_with_at_least_one_claim} ({(turn_with_at_least_one_claim / len(df)):.1%})"
+    )
 
 
 if __name__ == "__main__":
