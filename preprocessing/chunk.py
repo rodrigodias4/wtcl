@@ -186,7 +186,7 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    output_file = f"{args.input_file.split('.')[0]}_chunked.csv"
+    output_file = f"{'.'.join(args.input_file.split('.')[:-1])}.chunked.csv"
     console.print(f"Processing file: {args.input_file}")
     console.print(f"Using model: {args.model_name}")
     console.print(f"Stride: {args.stride}, Max Length: {args.max_length}")

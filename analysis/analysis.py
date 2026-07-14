@@ -1733,7 +1733,7 @@ def analyze(
         raise FileNotFoundError(f"Input not found: {input_csv}")
 
     outdir.mkdir(parents=True, exist_ok=True)
-    clear_output_directory(outdir)
+    # clear_output_directory(outdir)
 
     df = pd.read_csv(input_csv)
     df = _filter_moderator_rows(df)
