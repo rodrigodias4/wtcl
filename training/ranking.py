@@ -38,8 +38,17 @@ def collect_model_results(transformer_dir):
             continue
 
         model_results = json.load(open(model_dir / "results.json", "r"))
-        validation_results = model_results["overall"]["validation"]
-        test_results = model_results["overall"]["test"]
+
+        if "overall" not in model_results:
+            console.print(
+                f"Skipping {model_name} as 'overall' key is missing in results.json."
+            )
+            continue
+
+        if model_results["overall"].get("validation", None) is not None:
+            validation_results = model_results["overall"]["validation"]
+        if model_results["overall"].get("test", None) is not None:
+            test_results = model_results["overall"]["test"]
 
         models.append(
             {

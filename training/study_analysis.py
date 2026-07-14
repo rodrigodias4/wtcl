@@ -52,6 +52,7 @@ def plot_result_per_trial(study_results, outdir):
     max_at_trial = plt.step(
         trial_numbers,
         max_objective_value_at_trial,
+        where="post",
         color="red",
         alpha=0.2,
         linestyle="--",

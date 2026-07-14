@@ -286,6 +286,12 @@ def main():
                 study_trials[int(trial_number)] = trial_data
 
             study_name = existing_results.get("study_name", study_name)
+            args.num_startup_trials = existing_results.get("pruner", {}).get(
+                "n_startup_trials", args.num_startup_trials
+            )
+            args.num_warmup_steps = existing_results.get("pruner", {}).get(
+                "n_warmup_steps", args.num_warmup_steps
+            )
     else:
         # Create output directory for the study results
         study_output_dir = (
@@ -347,7 +353,7 @@ def main():
     # Create a new Optuna study for hyperparameter tuning
     study = optuna.create_study(
         direction="maximize",
-        sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
+        sampler=optuna.samplers.TPESampler(seed=args.seed),
         pruner=pruner,
         study_name=study_name,
         storage=storage,

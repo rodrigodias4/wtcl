@@ -224,3 +224,7 @@ README.md
 training/models
 training/*.json
 training/studies
+
+labelstudio/exports/*.filtered*
+labelstudio/exports/*.chunked*
+labelstudio/exports/*.sampled*

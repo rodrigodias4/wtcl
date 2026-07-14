@@ -25,6 +25,7 @@ from transformers import (
     AutoModel,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
+    set_seed,
 )
 from transformers.utils import logging
 from torchcrf import CRF
@@ -102,6 +103,8 @@ def set_random_seed(seed: int) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.use_deterministic_algorithms(True)
+    set_seed(seed)
 
 
 def get_model_output_dir(dataset_name: str, model_name: str, comment: str = "") -> Path:
@@ -373,11 +376,11 @@ class WTCLModel(nn.Module):
         # Set CRF priors if specified in hyperparameters
         if hparams["crf_priors"] and self.crf is not None:
             with torch.no_grad():
-                self.crf.transitions[O_ID, B_ID] = 2.0
+                self.crf.transitions[O_ID, B_ID] = 1.0
                 self.crf.transitions[O_ID, I_ID] = -10000.0
-                self.crf.transitions[B_ID, O_ID] = -2.0
-                self.crf.transitions[B_ID, B_ID] = -2.0
-                self.crf.transitions[B_ID, I_ID] = 2.0
+                self.crf.transitions[B_ID, O_ID] = -1.0
+                self.crf.transitions[B_ID, B_ID] = -1.0
+                self.crf.transitions[B_ID, I_ID] = 1.0
 
     def forward(
         self,
@@ -909,6 +912,12 @@ def train(
         progress.advance(progress_task_epochs)
         progress.refresh()
         gc.collect()
+
+    # If no validation loader is provided, save the last model state as the best model state
+    if val_loader is None:
+        best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+        best_epoch = epoch
+        model_results["best_epoch"] = best_epoch
     progress.remove_task(progress_task_epochs)
     return model_results, best_model_state, validation_preds, validation_labels
 
@@ -1186,7 +1195,9 @@ def train_lodo(
                     indent=4,
                 )
 
-    results["overall"] = {"validation": {}, "test": {}}
+    results["overall"] = {"test": {}}
+    if val:
+        results["overall"]["validation"] = {}
 
     # Compile best epochs and compute median best epoch across debates
     results["overall"]["best_epochs"] = [
@@ -1223,12 +1234,14 @@ def train_lodo(
                 )
 
     # Jaccard score is only computed for the macro label, so we compute it separately
-    results["overall"]["validation"]["macro"]["jaccard"] = np.mean(
-        [
-            results[debate]["best_validation_metrics"]["macro"]["jaccard"]
-            for debate in all_debates
-        ]
-    )
+    if val:
+        results["overall"]["validation"]["macro"]["jaccard"] = np.mean(
+            [
+                results[debate]["best_validation_metrics"]["macro"]["jaccard"]
+                for debate in all_debates
+            ]
+        )
+
     results["overall"]["test"]["macro"]["jaccard"] = np.mean(
         [results[debate]["test_metrics"]["macro"]["jaccard"] for debate in all_debates]
     )
