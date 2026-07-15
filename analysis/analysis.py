@@ -652,6 +652,7 @@ def _hist_plot(
     color: str,
     log_y: bool = False,
     align_integer_bins: bool = False,
+    show_value_labels: bool = False,
 ) -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
     clean = pd.to_numeric(series, errors="coerce").dropna()
@@ -688,6 +689,19 @@ def _hist_plot(
                 ax.set_xticks([round(float(clean.min()))])
         else:
             _set_reasonable_xticks(ax, float(bin_edges[0]), float(bin_edges[-1]))
+
+        if show_value_labels:
+            counts, edges = np.histogram(clean, bins=bin_edges)
+            for count, left_edge, right_edge in zip(counts, edges[:-1], edges[1:]):
+                if count > 0:
+                    ax.text(
+                        (left_edge + right_edge) / 2,
+                        count,
+                        str(count),
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                    )
     fig.tight_layout()
     fig.savefig(path, dpi=300)
     plt.close(fig)
@@ -760,6 +774,7 @@ def _plot_claims_per_turn(
         ),
         "#6d597a",
         align_integer_bins=True,
+        show_value_labels=True,
     )
 
 
