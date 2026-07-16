@@ -144,23 +144,13 @@ Annotate:
 - inflation rose by 5%
 - unemployment fell by 2%
 
-## Nested Claims
+## Reported Speech Attribution
 
-Prefer the core factual proposition.
-
-Example:
-
-> The minister said that crime fell by 10%.
-
-Annotate:
-
-> crime fell by 10%
-
-Not:
-
-> The minister said that crime fell by 10%.
-
-Unless the reporting act itself is the relevant claim.
+When the assertion concerns a speech act (e.g., someone said, claimed, denied, promised, admitted, or warned something), the reporting predicate and its complement are included in the span.
+Discourse markers, conversational fillers, and rhetorical framing are excluded.
+This only applies to speech attribution reported with respect to a domain-relevant and prominent entity whose utterance is of public interest.
+If the reported actor corresponds to a generalized, non-specific or vague attribution (e.g. "the polls say ..."), this rule does not apply, and only the embedded claim should be evaluated.
+Exclude evidential expressions that merely identify an information source (e.g., according to, based on, as reported by, per), unless the existence of the statement itself is the primary claim.
 
 ## Predictions
 
