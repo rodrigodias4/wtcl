@@ -61,6 +61,7 @@
 
   <Choices name="reason_domain" toName="text" perRegion="true" choice="multiple" required="false" layout="select">
     <Choice value="economy"/>
+    <Choice value="housing"/>
     <Choice value="health/medicine"/>
     <Choice value="science/research"/>
     <Choice value="education"/>
@@ -88,4 +89,8 @@
   </Choices>
 
   <TextArea name="region_comment" toName="text" editable="true" required="false" rows="2" placeholder="Optional: comment on this task even if no region is marked CheckWorthy"/>
+  
+  <Choices name="has_typo" toName="text" choice="multiple" perRegion="false">
+    <Choice value="Typo" />
+  </Choices>
 </View>

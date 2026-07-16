@@ -29,14 +29,14 @@ Each annotated span may receive labels from three independent dimensions:
 
 # 2. reason_frame (Epistemic / Discourse Framing)
 
-| Tag                    | Definition                                                        | Include when                                                            | Exclude when                                        |
-| ---------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------- |
-| speech attribution     | Source or reporting entity is cited                               | “the President said”, “the WHO said, quote”                             | when no source is referenced                        |
-| behavioral attribution | Real-world action or decision performed by actor                  | "Walmart fired employees", "you started the war"                        |
-| epistemic              | Claim about existence/quality of evidence or knowledge            | “no evidence exists”, “studies were debunked”                           | direct factual claims without meta-evidence content |
-| stance                 | Agent’s political/policy position or action toward an issue       | “the senator voted against the bill”, “the president supported the war” | general opinions without relevant agent action      |
-| anecdote               | Personal or isolated experiential claim                           | “I saw”, “in my experience”, “a man told me”                            | aggregated/statistical claims                       |
-| conspiracy             | Claims involving covert coordination or hidden systemic deception | “secret plan”, “cover-up”, “hidden agenda by elites”                    | standard political disagreement or criticism        |
+| Tag                    | Definition                                                        | Include when                                                            | Exclude when                                                        |
+| ---------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| speech attribution     | Source or reporting entity is cited                               | “the President said”, “the WHO said, quote”                             | when no source is referenced                                        |
+| behavioral attribution | Real-world action or decision performed by actor                  | "Walmart fired employees", "you started the war"                        | when the actor is a passive subject or not the director of an event |
+| epistemic              | Claim about existence/quality of evidence or knowledge            | “no evidence exists”, “studies were debunked”                           | direct factual claims without meta-evidence content                 |
+| stance                 | Agent’s political/policy position or action toward an issue       | “the senator voted against the bill”, “the president supported the war” | general opinions without relevant agent action                      |
+| anecdote               | Personal or isolated experiential claim                           | “I saw”, “in my experience”, “a man told me”                            | aggregated/statistical claims                                       |
+| conspiracy             | Claims involving covert coordination or hidden systemic deception | “secret plan”, “cover-up”, “hidden agenda by elites”                    | standard political disagreement or criticism                        |
 
 ---
 
@@ -45,6 +45,7 @@ Each annotated span may receive labels from three independent dimensions:
 | Tag                     | Definition                                                                   |
 | ----------------------- | ---------------------------------------------------------------------------- |
 | economy                 | Macroeconomics, markets, labor, inflation, fiscal policy                     |
+| housing                 | Housing availability and costs, rents                                        |
 | health/medicine         | Medical conditions, healthcare systems, epidemiology                         |
 | science/research        | Scientific findings, academic studies, experiments                           |
 | education               | Schools, learning systems, policy, pedagogy                                  |

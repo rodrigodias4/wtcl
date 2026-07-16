@@ -2,236 +2,364 @@
 
 ## Objective
 
-The goal of this annotation phase is to identify **check-worthy claim spans** within speaker turns.
+The objective of this annotation task is to identify **check-worthy claim spans** within political debate transcripts.
 
-A **speaker turn** is the unit of annotation. Each turn may contain **zero, one, or multiple check-worthy claims**.
+The unit of annotation is the **speaker turn**. Each turn may contain zero, one, or multiple check-worthy claims.
 
-A **check-worthy claim** is a factual assertion that can be verified against external evidence and is relevant enough to merit fact-checking.
+A **check-worthy claim** is a factual assertion that is sufficiently specific, verifiable using external evidence, and relevant to public discourse. The goal is to identify the textual span that expresses the assertion itself, preserving its complete propositional meaning while excluding surrounding discourse that does not contribute to the claim.
 
-## What to Annotate
+## Core Principles
 
-Annotate the **minimal contiguous span** that expresses the claim.
+Every annotation should satisfy the following principles.
 
-The span should:
+### Completeness
 
-- Contain enough information to preserve the factual proposition.
-- Exclude unnecessary surrounding context.
-- Be self-contained whenever possible.
+Annotate the **smallest complete contiguous span** that expresses the asserted proposition.
 
-### Example
+The span must contain all grammatical elements necessary to preserve the meaning of the claim. Do not remove subjects, auxiliary verbs, negation, reporting predicates (when applicable), or obligatory complements.
 
-**Speaker turn:**
+### Minimality
 
-> According to the latest census, unemployment dropped by 3% last year in Portugal.
+Exclude any material that does not contribute to the factual meaning of the assertion.
 
-**Annotate:**
+This includes conversational fillers, discourse markers, rhetorical framing, parenthetical remarks, evidential expressions, and other text that does not affect the truth conditions of the claim.
 
-> unemployment dropped by 3% last year in Portugal
+### Consistency
 
-Do **not** annotate:
+Identical linguistic constructions shall be annotated according to the same rule throughout the corpus.
 
-> According to the latest census, unemployment dropped by 3% last year in Portugal.
-
-Reason: "According to the latest census" is attribution, not part of the factual claim.
+Consistency is prioritized over isolated edge-case decisions. If two examples share the same syntactic structure, they should receive the same annotation unless a documented guideline explicitly distinguishes them.
 
 ## Definition of a Check-Worthy Claim
 
-A span is check-worthy if it satisfies all:
+A claim should satisfy all of the following criteria.
 
-### Factual Verifiability
+### Verifiable
 
-The claim can be checked against evidence.
+The assertion can be verified or falsified using external evidence.
 
-✔ Examples:
+Examples:
 
-- Inflation reached 8% in 2023.
-- The law was passed in March.
-- Lisbon has over 500,000 residents.
+✔ Inflation reached 8%.
 
-✘ Not check-worthy:
+✔ The Supreme Court ruled in favor of the plaintiff.
 
-- I think taxes are too high.
-- That policy is terrible.
+✔ The unemployment rate fell by 3%.
 
-### Specificity
+Not check-worthy:
 
-The claim must be sufficiently concrete.
+✘ I think inflation is terrible.
 
-✔ Specific:
+✘ This policy is a disaster.
 
-- Crime increased by 12% in 2024.
+### Specific
 
-✘ Too vague:
+The assertion must contain enough information to permit meaningful verification.
 
-- Crime is getting worse.
+Annotate:
+
+> Crime increased by 12% last year.
+
+Do not annotate:
+
+> Crime is getting worse.
 
 ### Public Relevance
 
-The claim should concern matters of public, political, social, economic, or historical importance.
+The assertion concerns matters of public interest, including politics, economics, public policy, law, institutions, science, health, security, international affairs, or other issues commonly subject to public fact-checking.
 
-Higher priority:
+## Span Boundaries
 
-- Statistics
-- Policy claims
-- Historical claims
-- Institutional actions
-- Scientific/medical claims
+### Minimal Complete Span
 
-Lower priority:
+Always annotate the smallest contiguous span that preserves a complete factual assertion.
 
-- Personal anecdotes
-- Trivial biographical details
+Prefer:
 
-## Span Selection Rules
+> **the economy recovered after the pandemic**
 
-## A. Minimal Span Principle
+rather than
 
-Always annotate the smallest span that preserves the factual proposition.
+> economy recovered
 
-✔ Good:
+or
 
-> increased by 15% in 2022
+> recovered after the pandemic
 
-✘ Too broad:
+### Required Grammatical Material
 
-> I believe it increased by 15% in 2022 because...
+Include grammatical elements that are necessary for the proposition.
 
-## B. Include Necessary Modifiers
+These include:
 
-Keep temporal, quantitative, and locative modifiers if they affect truth conditions.
+- subjects
+- auxiliary verbs
+- negation
+- reporting predicates
+- required complements
+- obligatory prepositional phrases
 
-✔ Include:
+Examples:
 
-- in 2021
-- by 30%
-- in Europe
+✔ **the economy grew**
 
-Example:
+✔ **the Supreme Court ruled that...**
 
-> exports grew by 10% in 2022
+✔ **did not increase**
 
-## C. Exclude Non-Claim Material
+✔ **has never admitted**
 
-Do not include:
+Do not remove words solely to shorten the span if doing so produces an incomplete proposition.
 
-- Hedging ("I think", "probably")
-- Attribution ("experts say", "according to X")
-- Discourse fillers ("you know", "basically")
-- Pure rhetorical framing
+### Necessary Modifiers
 
-Example:
+Include modifiers whenever they alter the factual meaning of the claim.
 
-Turn:
+Examples include:
 
-> I think, according to WHO, malaria cases doubled.
+- dates
+- quantities
+- locations
+- temporal references
+- comparisons
+
+Examples:
+
+✔ unemployment increased **by 5%**
+
+✔ exports doubled **in 2023**
+
+✔ inflation was lower **than in 2020**
+
+## Speech Attribution
+
+When the assertion concerns a communicative act performed by a publicly relevant actor, include the reporting predicate within the annotated span.
+
+Examples of reporting predicates include:
+
+- said
+- claimed
+- stated
+- promised
+- denied
+- admitted
+- acknowledged
+- warned
+- announced
+- testified
+
+Examples:
+
+Sentence:
+
+> The former President said he would terminate the Constitution.
 
 Annotate:
 
-> malaria cases doubled
+> **The former President said he would terminate the Constitution**
 
-## Special Cases
+Sentence:
 
-## Compound Claims
-
-If multiple independent factual claims appear in one turn, annotate each separately.
-
-Example:
-
-> Inflation rose by 5% and unemployment fell by 2%.
+> Harris claimed the economy was improving.
 
 Annotate:
 
-- inflation rose by 5%
-- unemployment fell by 2%
+> **Harris claimed the economy was improving**
 
-## Reported Speech Attribution
+The communicative act itself forms part of the factual assertion.
 
-When the assertion concerns a speech act (e.g., someone said, claimed, denied, promised, admitted, or warned something), the reporting predicate and its complement are included in the span.
-Discourse markers, conversational fillers, and rhetorical framing are excluded.
-This only applies to speech attribution reported with respect to a domain-relevant and prominent entity whose utterance is of public interest.
-If the reported actor corresponds to a generalized, non-specific or vague attribution (e.g. "the polls say ..."), this rule does not apply, and only the embedded claim should be evaluated.
-Exclude evidential expressions that merely identify an information source (e.g., according to, based on, as reported by, per), unless the existence of the statement itself is the primary claim.
+### Generalized Attribution
+
+Generalized or vague attribution is not considered a speech-event claim.
+
+Examples include:
+
+- the polls say
+- experts say
+- people say
+- critics argue
+- many believe
+
+These expressions function as general evidential framing rather than assertions about a specific communicative event.
+
+Only the embedded factual assertion should be evaluated.
+
+### Evidential Attribution
+
+Exclude expressions whose sole purpose is to identify an information source.
+
+Examples include:
+
+- according to
+- based on
+- as reported by
+- per
+
+Sentence:
+
+> According to the WHO, malaria cases doubled.
+
+Annotate:
+
+> **malaria cases doubled**
+
+## Quotations
+
+Quoted material should be treated according to the same rules as unquoted text.
+
+When the quotation forms part of a speech-event claim, include both the reporting predicate and the quoted content.
+
+Example:
+
+> **The former President said "Stand back and stand by."**
+
+Do not remove quoted material solely because it is not independently truth-conditional.
+
+If parenthetical interruptions occur within a quotation (e.g., "I'm quoting"), exclude only the interruption while preserving a single contiguous span whenever possible.
+
+## Relative Clauses and Clause Boundaries
+
+Relative clauses should be included whenever they form part of the asserted proposition.
+
+Examples:
+
+✔ **someone who has openly said he would terminate the Constitution**
+
+✔ **the company that received the contract**
+
+✔ **the law which was passed in 2022**
+
+Do not remove relative pronouns ("who", "that", "which") when doing so would fragment the grammatical structure of the claim.
+
+## Subjects and Determiners
+
+Include complete noun phrases functioning as the grammatical subject.
+
+Examples:
+
+✔ **the economy recovered**
+
+✔ **the unemployment rate increased**
+
+✔ **our military is stronger**
+
+✔ **someone who has openly said...**
+
+Do not remove articles ("the", "a", "an") or possessive determiners ("our", "their") when they belong to the subject noun phrase.
+
+## Appositives
+
+Include appositive phrases only when they contribute factual content.
+
+Example:
+
+> the Proud Boys, **a militia**
+
+If the appositive merely identifies the entity and does not alter the factual proposition, it may be excluded.
+
+If it introduces independently verifiable information, include it.
+
+## Parenthetical Expressions
+
+Exclude parenthetical material that does not alter the factual meaning.
+
+Examples:
+
+- you know
+- as you know
+- frankly
+- I'm quoting
+- believe me
+
+Example:
+
+> I took in billions and billions of dollars, **as you know**, from China.
+
+Annotate:
+
+> **I took in billions and billions of dollars from China**
+
+## Multiple Claims
+
+When two or more independent factual propositions occur within the same sentence, annotate each proposition separately.
+
+Example:
+
+> Inflation increased by 5% and unemployment fell by 2%.
+
+Annotate:
+
+- **inflation increased by 5%**
+- **unemployment fell by 2%**
+
+Do not split clauses that together express a single proposition.
 
 ## Predictions
 
-Future claims are check-worthy only if concrete and falsifiable.
+Future-oriented claims are annotated only when sufficiently specific and objectively verifiable.
 
-✔:
+Annotate:
 
-> GDP will grow 4% next year.
+> GDP will grow by 4% next year.
 
-✘:
+Do not annotate:
 
 > Things will get better.
 
 ## Comparisons
 
-Annotate if measurable or factual.
+Comparative statements should be annotated only when objectively verifiable.
 
-✔:
+Annotate:
 
 > Portugal has higher inflation than Spain.
 
-✘:
+Do not annotate:
 
 > Portugal is doing better than Spain.
 
-## Discourse markers
-
-Discourse markers and parentheticals that do not alter propositional content should be included in spans **only if** excluding them would fragment a single check-worthy claim. They are not independently annotated nor treated as span boundaries.
-
-> “I took in billions and billions of dollars, as you know, from China”
-
-## What NOT to Annotate
+## Non-Claims
 
 Do not annotate:
 
-- Opinions
-- Value judgments
-- Preferences
-- Questions
-- Commands
-- Hypotheticals
-- Pure speculation
-- Metaphors/jokes
+- opinions
+- value judgments
+- preferences
+- rhetorical questions
+- commands
+- requests
+- recommendations
+- wishes
+- hypotheticals
+- jokes
+- metaphors
 
-Examples:
+unless they contain an embedded factual assertion satisfying the annotation criteria.
 
-✘ This is the worst government ever.
-✘ What if inflation rises again?
-✘ We should lower taxes.
+## Punctuation
 
-## Boundary Resolution Heuristics
+Trailing and leading punctuation (e.g., ., !, ?) should not be included in annotated spans unless it forms part of the lexical representation of a token (e.g., decimal points, abbreviations, contractions).
 
-When uncertain:
+## Boundary Resolution
 
-**Prefer shorter spans over longer spans.**
+When uncertainty remains, apply the following questions in order.
 
-Ask:
+1. Does the span express a complete factual assertion?
+2. Would removing any included token alter the factual meaning?
+3. Does every included token contribute to the asserted proposition?
+4. Would the same construction be annotated identically elsewhere in the corpus?
 
-Can this be independently fact-checked?
-Does removing this word change the truth conditions?
-Is this part necessary for the factual proposition?
+If the answer to the fourth question is **no**, revise the annotation to preserve corpus-wide consistency.
 
-If not necessary, exclude it.
+## Final Consistency Check
 
-## Consistency Rule
+Before finalizing an annotation, verify that:
 
-For repeated structural patterns, apply the same annotation logic consistently across the dataset.
+- The span expresses a factual assertion.
+- The assertion is specific and verifiable.
+- The span is contiguous.
+- The span is grammatically complete.
+- No unnecessary discourse material is included.
+- The annotation follows the same rules applied to structurally similar examples elsewhere in the corpus.
 
-Consistency is more important than edge-case perfection.
-
-The goal of this phase is to maximize **inter-annotator agreement** and produce stable training data.
-
-## Final Checklist
-
-Before finalizing a span:
-
-- Is it factual?
-- Is it verifiable?
-- Is it specific?
-- Is it minimally bounded?
-- Is it free of unnecessary framing?
-
-If all yes → annotate.
-If uncertain → lean conservative and annotate only the strongest factual core.
+When uncertainty remains between two valid annotations, prefer the alternative that is **most consistent with previously annotated examples**. Corpus-wide consistency is the primary objective of the annotation process.

@@ -161,7 +161,44 @@ def min_words(
     return df_min_words, len(df) - len(df_min_words)
 
 
-def remove_speech_markers(df: pd.DataFrame, text_col: str) -> pd.DataFrame:
+def remove_speech_markers(
+    df: pd.DataFrame,
+    text_col: str,
+    leading_sequences: Sequence[str] = ("--", "..."),
+    trailing_sequences: Sequence[str] = ("--"),
+) -> pd.DataFrame:
+    def regex_replace_with_span_map(text, pattern, replacement):
+        """
+        Returns:
+        cleaned_text
+        map: original_index -> cleaned_index (or -1 if deleted)
+        """
+
+        matches = list(re.finditer(pattern, text))
+
+        orig_to_clean = [-1] * len(text)
+        cleaned = []
+        j = 0
+        i = 0
+
+        while i < len(text):
+            if matches and i == matches[0].start():
+                match = matches.pop(0)
+                cleaned.append(replacement)
+                anchor = j + (replacement.find("—") if "—" in replacement else 0)
+                for k in range(match.start(), match.end()):
+                    orig_to_clean[k] = anchor
+                i = match.end()
+                j += len(replacement)
+                continue
+
+            orig_to_clean[i] = j
+            cleaned.append(text[i])
+            i += 1
+            j += 1
+
+        return "".join(cleaned), orig_to_clean
+
     def regex_clean_with_span_map(text, pattern):
         """
         Returns:
@@ -197,6 +234,55 @@ def remove_speech_markers(df: pd.DataFrame, text_col: str) -> pd.DataFrame:
 
         return "".join(cleaned), orig_to_clean
 
+    def strip_boundary_sequences_with_span_map(text, leading, trailing):
+        start = 0
+        end = len(text)
+
+        while True:
+            changed = False
+
+            while start < end and text[start].isspace():
+                start += 1
+                changed = True
+
+            while start < end:
+                matched = False
+                for sequence in leading:
+                    if sequence and text.startswith(sequence, start, end):
+                        start += len(sequence)
+                        matched = True
+                        changed = True
+                        break
+                if not matched:
+                    break
+
+            while end > start and text[end - 1].isspace():
+                end -= 1
+                changed = True
+
+            while end > start:
+                matched = False
+                for sequence in trailing:
+                    if sequence and text.endswith(sequence, start, end):
+                        end -= len(sequence)
+                        matched = True
+                        changed = True
+                        break
+                if not matched:
+                    break
+
+            if not changed:
+                break
+
+        orig_to_clean = [-1] * len(text)
+        cleaned = []
+
+        for i in range(start, end):
+            orig_to_clean[i] = len(cleaned)
+            cleaned.append(text[i])
+
+        return "".join(cleaned), orig_to_clean
+
     def remap_span(span, mapping, text):
         new = [
             mapping[i] for i in range(span["start"], span["end"]) if mapping[i] != -1
@@ -217,6 +303,14 @@ def remove_speech_markers(df: pd.DataFrame, text_col: str) -> pd.DataFrame:
         spans = json.loads(row["spans"])
         # Replace fancy apostrophes with standard apostrophes
         text = re.sub("’", "'", text)
+        # Remove configured boundary markers before interior normalization.
+        text, orig_to_clean = strip_boundary_sequences_with_span_map(
+            text, leading_sequences, trailing_sequences
+        )
+        spans = [remap_span(span, orig_to_clean, text) for span in spans]
+        # Normalize speaker pauses / self-repairs into a spaced em dash while keeping offsets anchored.
+        text, orig_to_clean = regex_replace_with_span_map(text, r"--", " — ")
+        spans = [remap_span(span, orig_to_clean, text) for span in spans]
         # Remove content in square brackets
         text, orig_to_clean = regex_clean_with_span_map(text, r"\[.*\]")
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
@@ -224,7 +318,10 @@ def remove_speech_markers(df: pd.DataFrame, text_col: str) -> pd.DataFrame:
         text, orig_to_clean = regex_clean_with_span_map(text, r"\(.*\)")
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
         # Replace multiple spaces with a single space
-        text, orig_to_clean = regex_clean_with_span_map(text, r"\s\s+")
+        text, orig_to_clean = regex_replace_with_span_map(text, r"\s\s+", " ")
+        spans = [remap_span(span, orig_to_clean, text) for span in spans]
+        # Trim remaining edge whitespace after cleanup.
+        text, orig_to_clean = strip_boundary_sequences_with_span_map(text, (), ())
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
         df_cleaned.loc[i, text_col] = text
         df_cleaned.loc[i, "spans"] = json.dumps(spans, ensure_ascii=False)
@@ -276,8 +373,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     console.print(f"Removed {removed} moderator turns")
 
-    preprocessed = remove_speech_markers(preprocessed, text_col=args.text_col)
-
     preprocessed, removed = min_words(
         preprocessed,
         debate_col=args.debate_col,
@@ -286,6 +381,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         min_words=args.min_words,
     )
     console.print(f"Removed {removed} turns with fewer than {args.min_words} words")
+
+    preprocessed = remove_speech_markers(preprocessed, text_col=args.text_col)
 
     # Drop empty text rows after filtering
     preprocessed = preprocessed[preprocessed[args.text_col] != ""]

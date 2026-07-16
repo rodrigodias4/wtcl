@@ -305,6 +305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ],
     )
     out.parent.mkdir(parents=True, exist_ok=True)
+    out_df.sort_values("id", inplace=True)
     out_df.to_csv(out, index=False)
     print(f"Removed {duplicates_removed} duplicate rows")
     print(f"Wrote {out} ({len(out_df)} rows)")
