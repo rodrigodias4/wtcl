@@ -385,7 +385,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     preprocessed = remove_speech_markers(preprocessed, text_col=args.text_col)
 
     # Drop empty text rows after filtering
+    preprocessed = preprocessed[preprocessed[args.text_col].notnull()]
     preprocessed = preprocessed[preprocessed[args.text_col] != ""]
+
+    # Drop rows without alphanumeric characters
+    preprocessed = preprocessed[
+        preprocessed[args.text_col].str.contains(r"[a-zA-Z0-9]", na=False)
+    ]
 
     """ preprocessed, removed = clip_turns_per_debate(
         filtered,
