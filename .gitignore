@@ -228,3 +228,4 @@ training/studies
 labelstudio/exports/*.filtered*
 labelstudio/exports/*.chunked*
 labelstudio/exports/*.sampled*
+labelstudio/exports/project-*

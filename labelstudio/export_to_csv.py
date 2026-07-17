@@ -4,7 +4,10 @@ This emits a schema with:
     id, debate_id, speaker, text, spans, error
 
 Where `spans` is a JSON list of:
-    {"start": int, "end": int, "text": str, "reason_text": str, "reason_choices": [str]}
+    {"start": int, "end": int, "text": str, "reason_text": str,
+     "reason_form": [str], "reason_frame": [str], "reason_domain": [str]}
+
+The three reason axes are kept separate in the span dictionary.
 
 Assumptions:
 - Tasks were imported using `ls_prepare_tasks.py`, which stores:
@@ -34,7 +37,9 @@ class Span:
     end: int
     text: str
     reason_text: str = ""
-    reason_choices: List[str] = field(default_factory=list)
+    reason_form: List[str] = field(default_factory=list)
+    reason_frame: List[str] = field(default_factory=list)
+    reason_domain: List[str] = field(default_factory=list)
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -91,9 +96,14 @@ def _pick_annotation(task: Dict[str, Any], take: str) -> Optional[Dict[str, Any]
 
 def _extract_reasons(
     result_list: List[Dict[str, Any]],
-    reason_from_names: Tuple[str, ...] = ("reason", "reason_choice"),
+    reason_from_names: Tuple[str, ...] = (
+        "reason",
+        "reason_form",
+        "reason_frame",
+        "reason_domain",
+    ),
 ) -> Dict[Tuple[int, int], Dict[str, Any]]:
-    """Map (start,end) -> {"text": str, "choices": List[str]} from textarea and choices fields."""
+    """Map (start,end) -> reason text and per-axis choices."""
     out: Dict[Tuple[int, int], Dict[str, Any]] = {}
     for r in result_list:
         if not isinstance(r, dict):
@@ -112,7 +122,12 @@ def _extract_reasons(
             continue
         key = (start, end)
         if key not in out:
-            out[key] = {"text": "", "choices": []}
+            out[key] = {
+                "text": "",
+                "reason_form": [],
+                "reason_frame": [],
+                "reason_domain": [],
+            }
 
         if rtype == "textarea":
             text_val = v.get("text")
@@ -124,11 +139,23 @@ def _extract_reasons(
             out[key]["text"] = str(text).strip()
 
         elif rtype == "choices":
+            from_name = str(r.get("from_name") or "")
             choices = v.get("choices")
+            parsed_choices: List[str] = []
             if isinstance(choices, list):
-                out[key]["choices"] = [str(x) for x in choices if str(x).strip()]
+                parsed_choices = [str(x) for x in choices if str(x).strip()]
             elif isinstance(choices, str):
-                out[key]["choices"] = [choices]
+                parsed_choices = [choices]
+
+            if parsed_choices and from_name in {
+                "reason_form",
+                "reason_frame",
+                "reason_domain",
+            }:
+                existing_choices = out[key][from_name]
+                for choice in parsed_choices:
+                    if choice not in existing_choices:
+                        existing_choices.append(choice)
     return out
 
 
@@ -169,14 +196,24 @@ def _extract_spans(result_list: List[Dict[str, Any]], label_value: str) -> List[
             continue
         seen.add(key)
 
-        reason_info = reasons.get(key, {"text": "", "choices": []})
+        reason_info = reasons.get(
+            key,
+            {
+                "text": "",
+                "reason_form": [],
+                "reason_frame": [],
+                "reason_domain": [],
+            },
+        )
         spans.append(
             Span(
                 start=start,
                 end=end,
                 text=text,
                 reason_text=reason_info.get("text", ""),
-                reason_choices=reason_info.get("choices", []),
+                reason_form=reason_info.get("reason_form", []),
+                reason_frame=reason_info.get("reason_frame", []),
+                reason_domain=reason_info.get("reason_domain", []),
             )
         )
 
@@ -256,7 +293,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "end": s.end,
                             "text": s.text,
                             "reason_text": s.reason_text,
-                            "reason_choices": s.reason_choices,
+                            "reason_form": s.reason_form,
+                            "reason_frame": s.reason_frame,
+                            "reason_domain": s.reason_domain,
                         }
                         for s in spans
                     ],

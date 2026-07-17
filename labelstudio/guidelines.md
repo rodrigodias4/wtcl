@@ -217,19 +217,15 @@ Do not remove quoted material solely because it is not independently truth-condi
 
 If parenthetical interruptions occur within a quotation (e.g., "I'm quoting"), exclude only the interruption while preserving a single contiguous span whenever possible.
 
-## Relative Clauses and Clause Boundaries
+## Relative Pronouns and Clauses
 
-Relative clauses should be included whenever they form part of the asserted proposition.
+When a generic head noun (someone, person, individual, people, those who, etc.) merely introduces a relative clause, begin the span at the relative pronoun rather than the generic head.
 
-Examples:
+> This is someone **who has...**
 
-✔ **someone who has openly said he would terminate the Constitution**
+> the same individual **who defended...**
 
-✔ **the company that received the contract**
-
-✔ **the law which was passed in 2022**
-
-Do not remove relative pronouns ("who", "that", "which") when doing so would fragment the grammatical structure of the claim.
+> that principle **which led to...**
 
 ## Subjects and Determiners
 
@@ -338,7 +334,7 @@ unless they contain an embedded factual assertion satisfying the annotation crit
 
 ## Punctuation
 
-Trailing and leading punctuation (e.g., ., !, ?) should not be included in annotated spans unless it forms part of the lexical representation of a token (e.g., decimal points, abbreviations, contractions).
+Punctuation (e.g., ., !, ?) should not be included in annotated spans unless it forms part of the lexical representation of a token (e.g., decimal points, abbreviations, contractions) or the claim spans multiple sentences. Trailing and leading punctuation is never annotated.
 
 ## Boundary Resolution
 

@@ -67,7 +67,9 @@ class SpanRecord:
     end: Optional[int]
     text: str
     reason: str
-    reason_choices: List[str]
+    reason_form: List[str]
+    reason_frame: List[str]
+    reason_domain: List[str]
     turn_char_len: int
     turn_word_len: int
     span_char_len: Optional[int]
@@ -263,7 +265,9 @@ def _extract_spans_from_row(
     check_span_col = (
         row.get("check_worthy_span") if "check_worthy_span" in row.index else None
     )
-    results: List[Tuple[Optional[int], Optional[int], str, str, List[str]]] = []
+    results: List[
+        Tuple[Optional[int], Optional[int], str, str, List[str], List[str], List[str]]
+    ] = []
 
     raw_spans = _parse_json_spans(spans_col)
     if raw_spans:
@@ -272,8 +276,20 @@ def _extract_spans_from_row(
             end = _safe_int(span.get("end"))
             span_text = _normalize_span_text(span.get("text"))
             reason = _normalize_span_text(span.get("reason_text") or span.get("reason"))
-            reason_choices = _parse_reason_choices(span.get("reason_choices"))
-            results.append((start, end, span_text, reason, reason_choices))
+            reason_form = _parse_reason_choices(span.get("reason_form"))
+            reason_frame = _parse_reason_choices(span.get("reason_frame"))
+            reason_domain = _parse_reason_choices(span.get("reason_domain"))
+            results.append(
+                (
+                    start,
+                    end,
+                    span_text,
+                    reason,
+                    reason_form,
+                    reason_frame,
+                    reason_domain,
+                )
+            )
         return results
 
     span_text = _normalize_span_text(check_span_col)
@@ -286,7 +302,7 @@ def _extract_spans_from_row(
     else:
         start = None
         end = None
-    results.append((start, end, span_text, "", []))
+    results.append((start, end, span_text, "", [], [], []))
     return results
 
 
@@ -318,9 +334,15 @@ def _build_metrics(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         span_char_lengths: List[int] = []
         span_word_lengths: List[int] = []
 
-        for span_index, (start, end, span_text, reason, reason_choices) in enumerate(
-            turn_spans
-        ):
+        for span_index, (
+            start,
+            end,
+            span_text,
+            reason,
+            reason_form,
+            reason_frame,
+            reason_domain,
+        ) in enumerate(turn_spans):
             span_char_len: Optional[int]
             span_word_len: Optional[int]
             rel_start: Optional[float]
@@ -366,7 +388,9 @@ def _build_metrics(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                     end=end,
                     text=span_text,
                     reason=reason,
-                    reason_choices=reason_choices,
+                    reason_form=reason_form,
+                    reason_frame=reason_frame,
+                    reason_domain=reason_domain,
                     turn_char_len=turn_char_len,
                     turn_word_len=turn_word_len,
                     span_char_len=span_char_len,
@@ -465,7 +489,9 @@ def _compute_speaker_metrics(
     ).reset_index(drop=True)
 
 
-def _compute_reason_choice_metrics(claim_metrics: pd.DataFrame) -> pd.DataFrame:
+def _compute_reason_axis_metrics(
+    claim_metrics: pd.DataFrame, axis_column: str
+) -> pd.DataFrame:
     if claim_metrics.empty or "speaker" not in claim_metrics.columns:
         return pd.DataFrame(
             columns=["reason_choice", "speaker", "count", "total_count"]
@@ -474,7 +500,7 @@ def _compute_reason_choice_metrics(claim_metrics: pd.DataFrame) -> pd.DataFrame:
     records: List[Dict[str, Any]] = []
     for _, row in claim_metrics.iterrows():
         speaker = _normalize_speaker(row.get("speaker"))
-        for choice in _parse_reason_choices(row.get("reason_choices")):
+        for choice in _parse_reason_choices(row.get(axis_column)):
             records.append({"reason_choice": choice, "speaker": speaker})
 
     if not records:
@@ -499,11 +525,25 @@ def _compute_reason_choice_metrics(claim_metrics: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+def _compute_reason_axis_totals(
+    claim_metrics: pd.DataFrame, axis_column: str
+) -> Dict[str, int]:
+    totals: Dict[str, int] = {}
+    if claim_metrics.empty or axis_column not in claim_metrics.columns:
+        return totals
+
+    for _, row in claim_metrics.iterrows():
+        for choice in _parse_reason_choices(row.get(axis_column)):
+            totals[choice] = totals.get(choice, 0) + 1
+
+    return dict(sorted(totals.items(), key=lambda item: (-item[1], item[0])))
+
+
 def _save_summary(
     turn_metrics: pd.DataFrame,
     claim_metrics: pd.DataFrame,
     speaker_metrics: pd.DataFrame,
-    reason_choice_metrics: pd.DataFrame,
+    reason_axis_metrics: Dict[str, pd.DataFrame],
     outdir: Path,
 ) -> None:
     per_speaker: Dict[str, Dict[str, Any]] = {}
@@ -570,18 +610,27 @@ def _save_summary(
             if not claim_metrics.empty
             else pd.Series(dtype=float)
         ),
-        "reason_choice_count": (
-            int(reason_choice_metrics["count"].sum())
-            if not reason_choice_metrics.empty
-            else 0
-        ),
-        "reason_choice_totals": (
-            reason_choice_metrics.groupby("reason_choice", dropna=False)["count"]
+        "reason_form_count": int(
+            reason_axis_metrics.get("reason_form", pd.DataFrame())
+            .get("count", pd.Series(dtype=float))
             .sum()
-            .sort_values(ascending=False)
-            .to_dict()
-            if not reason_choice_metrics.empty
-            else {}
+        ),
+        "reason_frame_count": int(
+            reason_axis_metrics.get("reason_frame", pd.DataFrame())
+            .get("count", pd.Series(dtype=float))
+            .sum()
+        ),
+        "reason_domain_count": int(
+            reason_axis_metrics.get("reason_domain", pd.DataFrame())
+            .get("count", pd.Series(dtype=float))
+            .sum()
+        ),
+        "reason_form_totals": _compute_reason_axis_totals(claim_metrics, "reason_form"),
+        "reason_frame_totals": _compute_reason_axis_totals(
+            claim_metrics, "reason_frame"
+        ),
+        "reason_domain_totals": _compute_reason_axis_totals(
+            claim_metrics, "reason_domain"
         ),
         "per_speaker": per_speaker,
     }
@@ -1511,27 +1560,31 @@ def _plot_speaker_metrics(
     )
 
 
-def _plot_reason_choice_rankings(
-    reason_choice_metrics: pd.DataFrame, outdir: Path, title_prefix: str
+def _plot_reason_axis_rankings(
+    reason_axis_metrics: pd.DataFrame,
+    axis_name: str,
+    outdir: Path,
+    title_prefix: str,
 ) -> None:
     fig, ax = plt.subplots(figsize=(13, 7))
 
-    if reason_choice_metrics.empty:
+    axis_label = axis_name.replace("_", " ").title()
+    if reason_axis_metrics.empty:
         ax.text(
             0.5,
             0.5,
-            "No reason choices available",
+            f"No {axis_label.lower()} choices available",
             ha="center",
             va="center",
             transform=ax.transAxes,
         )
         ax.set_axis_off()
         fig.tight_layout()
-        fig.savefig(_figure_path(outdir, "reason_choice_rankings.png"), dpi=300)
+        fig.savefig(_figure_path(outdir, f"{axis_name}_rankings.png"), dpi=300)
         plt.close(fig)
         return
 
-    pivot = reason_choice_metrics.pivot_table(
+    pivot = reason_axis_metrics.pivot_table(
         index="reason_choice",
         columns="speaker",
         values="count",
@@ -1575,12 +1628,12 @@ def _plot_reason_choice_rankings(
     _decorate_axis(
         ax,
         (
-            f"{title_prefix}Reason Choice Frequency by Speaker"
+            f"{title_prefix}{axis_label} Frequency by Speaker"
             if title_prefix
-            else "Reason Choice Frequency by Speaker"
+            else f"{axis_label} Frequency by Speaker"
         ),
         "Labeled spans",
-        "Reason choice",
+        axis_label,
     )
     ax.set_xlim(0, max(1.0, float(left.max()) * 1.12))
 
@@ -1589,20 +1642,22 @@ def _plot_reason_choice_rankings(
         ax.legend(title="Speaker", ncol=legend_cols, loc="lower right")
 
     fig.tight_layout()
-    fig.savefig(_figure_path(outdir, "reason_choice_rankings.png"), dpi=300)
+    fig.savefig(_figure_path(outdir, f"{axis_name}_rankings.png"), dpi=300)
     plt.close(fig)
 
 
 def _plot_reason_choice_correlation(
     claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    # Expect `reason_choices` column to contain lists of choices per claim
-    if claim_metrics.empty or "reason_choices" not in claim_metrics.columns:
+    axis_columns = ["reason_form", "reason_frame", "reason_domain"]
+    if claim_metrics.empty or not any(
+        col in claim_metrics.columns for col in axis_columns
+    ):
         fig, ax = plt.subplots(figsize=(10, 8))
         ax.text(
             0.5,
             0.5,
-            "No reason choice data available",
+            "No reason axis data available",
             ha="center",
             va="center",
             transform=ax.transAxes,
@@ -1613,36 +1668,26 @@ def _plot_reason_choice_correlation(
         plt.close(fig)
         return
 
-    # Build binary matrix of shape (n_claims, n_reason_choices)
-    records = []
-    all_choices: List[str] = []
+    axis_labels = {
+        "reason_form": "Form",
+        "reason_frame": "Frame",
+        "reason_domain": "Domain",
+    }
+    records: List[List[str]] = []
+    all_labels: List[str] = []
     for _, row in claim_metrics.iterrows():
-        raw = row.get("reason_choices")
-        # normalize to list
-        choices = []
-        if isinstance(raw, list):
-            choices = [str(x) for x in raw if x is not None]
-        elif pd.isna(raw):
-            choices = []
-        else:
-            try:
-                # maybe a JSON string
-                parsed = json.loads(str(raw))
-                if isinstance(parsed, list):
-                    choices = [str(x) for x in parsed if x is not None]
-                else:
-                    choices = [str(parsed)]
-            except Exception:
-                choices = [str(raw)] if raw else []
+        choices_for_claim: List[str] = []
+        for axis_column in axis_columns:
+            for choice in _parse_reason_choices(row.get(axis_column)):
+                label = f"{axis_labels[axis_column]}: {choice}"
+                choices_for_claim.append(label)
+                if label not in all_labels:
+                    all_labels.append(label)
+        records.append(choices_for_claim)
 
-        normalized = [_normalize_span_text(c) for c in choices]
-        normalized = [c for c in normalized if c]
-        records.append(normalized)
-        for c in normalized:
-            if c not in all_choices:
-                all_choices.append(c)
+    all_labels = sorted(all_labels)
 
-    if not all_choices or len(all_choices) < 2:
+    if not all_labels or len(all_labels) < 2:
         fig, ax = plt.subplots(figsize=(10, 8))
         ax.text(
             0.5,
@@ -1658,19 +1703,19 @@ def _plot_reason_choice_correlation(
         plt.close(fig)
         return
 
-    # Create DataFrame
     bin_rows: List[Dict[str, int]] = []
-    for choices in records:
-        row = {choice: (1 if choice in choices else 0) for choice in all_choices}
-        bin_rows.append(row)
+    for choices_for_claim in records:
+        bin_rows.append(
+            {label: (1 if label in choices_for_claim else 0) for label in all_labels}
+        )
 
-    bin_df = pd.DataFrame(bin_rows, columns=all_choices)
+    bin_df = pd.DataFrame(bin_rows, columns=all_labels)
     if bin_df.empty:
         fig, ax = plt.subplots(figsize=(10, 8))
         ax.text(
             0.5,
             0.5,
-            "No reason choice data available",
+            "No reason axis data available",
             ha="center",
             va="center",
             transform=ax.transAxes,
@@ -1681,37 +1726,41 @@ def _plot_reason_choice_correlation(
         plt.close(fig)
         return
 
-    # Compute Pearson correlation matrix (suitable for binary co-occurrence / phi)
     corr = bin_df.corr()
-
-    size = max(10.0, 0.4 * len(all_choices) + 4.0)
+    size = max(10.0, 0.35 * len(all_labels) + 4.0)
     fig, ax = plt.subplots(figsize=(size, size))
 
     im = ax.imshow(corr.to_numpy(dtype=float), cmap="coolwarm", vmin=-1, vmax=1)
-    ax.set_xticks(np.arange(len(all_choices)))
-    ax.set_yticks(np.arange(len(all_choices)))
-    ax.set_xticklabels(all_choices, rotation=45, ha="right")
-    ax.set_yticklabels(all_choices)
-    # ax.tick_params(axis="both", labelsize=9)
+    ax.set_xticks(np.arange(len(all_labels)))
+    ax.set_yticks(np.arange(len(all_labels)))
+    ax.set_xticklabels(all_labels, rotation=45, ha="right")
+    ax.set_yticklabels(all_labels)
     ax.set_title(
         (
-            f"{title_prefix}Reason Choice Correlation"
+            f"{title_prefix}Reason Choice Correlation by Axis"
             if title_prefix
-            else "Reason Choice Correlation"
+            else "Reason Choice Correlation by Axis"
         )
     )
 
-    # annotate
-    for i in range(len(all_choices)):
-        for j in range(len(all_choices)):
+    for i in range(len(all_labels)):
+        for j in range(len(all_labels)):
             val = corr.iat[i, j]
             ax.text(
-                j, i, f"{val:.2f}", ha="center", va="center", color="black", fontsize=8
+                j,
+                i,
+                f"{val:.2f}",
+                ha="center",
+                va="center",
+                color="black",
+                fontsize=7,
             )
 
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation")
     fig.tight_layout()
-    fig.savefig(_figure_path(outdir, "reason_choice_correlation.png"), dpi=300)
+    fig.savefig(
+        _figure_path(outdir, "reason_correlation.png"), dpi=300, bbox_inches="tight"
+    )
     plt.close(fig)
 
 
@@ -1719,13 +1768,14 @@ def _write_tables(
     turn_metrics: pd.DataFrame,
     claim_metrics: pd.DataFrame,
     speaker_metrics: pd.DataFrame,
-    reason_choice_metrics: pd.DataFrame,
+    reason_axis_metrics: Dict[str, pd.DataFrame],
     outdir: Path,
 ) -> None:
     turn_metrics.to_csv(outdir / "turn_metrics.csv", index=False)
     claim_metrics.to_csv(outdir / "claim_metrics.csv", index=False)
     speaker_metrics.to_csv(outdir / "speaker_metrics.csv", index=False)
-    reason_choice_metrics.to_csv(outdir / "reason_choice_metrics.csv", index=False)
+    for axis_name, metrics in reason_axis_metrics.items():
+        metrics.to_csv(outdir / f"{axis_name}_metrics.csv", index=False)
 
 
 def clear_output_directory(outdir: Path) -> None:
@@ -1754,20 +1804,24 @@ def analyze(
     df = _filter_moderator_rows(df)
     turn_metrics, claim_metrics = _build_metrics(df)
     speaker_metrics = _compute_speaker_metrics(turn_metrics, claim_metrics)
-    reason_choice_metrics = _compute_reason_choice_metrics(claim_metrics)
+    reason_axis_metrics = {
+        "reason_form": _compute_reason_axis_metrics(claim_metrics, "reason_form"),
+        "reason_frame": _compute_reason_axis_metrics(claim_metrics, "reason_frame"),
+        "reason_domain": _compute_reason_axis_metrics(claim_metrics, "reason_domain"),
+    }
 
     _write_tables(
         turn_metrics,
         claim_metrics,
         speaker_metrics,
-        reason_choice_metrics,
+        reason_axis_metrics,
         outdir,
     )
     _save_summary(
         turn_metrics,
         claim_metrics,
         speaker_metrics,
-        reason_choice_metrics,
+        reason_axis_metrics,
         outdir,
     )
 
@@ -1787,7 +1841,8 @@ def analyze(
         bins=bins,
         title_prefix=prefix,
     )
-    _plot_reason_choice_rankings(reason_choice_metrics, outdir, title_prefix=prefix)
+    for axis_name, metrics in reason_axis_metrics.items():
+        _plot_reason_axis_rankings(metrics, axis_name, outdir, title_prefix=prefix)
     _plot_reason_choice_correlation(claim_metrics, outdir, title_prefix=prefix)
 
     print(f"Analyzed {len(turn_metrics)} turns and {len(claim_metrics)} claims")
