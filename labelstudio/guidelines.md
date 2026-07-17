@@ -203,6 +203,10 @@ Annotate:
 
 > **malaria cases doubled**
 
+### Absent reported proposition
+
+Annotate claims about speech only if the proposition whose truth is being asserted or denied is identifiable. If the utterance merely refers to an unspecified prior statement (e.g., "I didn't say that", "He never said that") without recoverable propositional content, do not annotate it.
+
 ## Quotations
 
 Quoted material should be treated according to the same rules as unquoted text.
@@ -225,8 +229,6 @@ When a generic head noun (someone, person, individual, people, those who, etc.) 
 
 > the same individual **who defended...**
 
-> that principle **which led to...**
-
 ## Subjects and Determiners
 
 Include complete noun phrases functioning as the grammatical subject.
@@ -238,8 +240,6 @@ Examples:
 ✔ **the unemployment rate increased**
 
 ✔ **our military is stronger**
-
-✔ **someone who has openly said...**
 
 Do not remove articles ("the", "a", "an") or possessive determiners ("our", "their") when they belong to the subject noun phrase.
 

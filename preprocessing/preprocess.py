@@ -303,12 +303,17 @@ def remove_speech_markers(
         spans = json.loads(row["spans"])
         # Replace fancy apostrophes with standard apostrophes
         text = re.sub("’", "'", text)
+        # Replace ". . ." with normal ellipsis
+        text, orig_to_clean = regex_replace_with_span_map(text, r"\.\s*\.\s*\.", "...")
+        spans = [remap_span(span, orig_to_clean, text) for span in spans]
+
         # Remove configured boundary markers before interior normalization.
         text, orig_to_clean = strip_boundary_sequences_with_span_map(
             text, leading_sequences, trailing_sequences
         )
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
-        # Normalize speaker pauses / self-repairs into a spaced em dash while keeping offsets anchored.
+
+        # Normalize speaker pauses / self-repairs into a spaced em dash
         text, orig_to_clean = regex_replace_with_span_map(text, r"--", " — ")
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
         # Remove content in square brackets
