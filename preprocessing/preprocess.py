@@ -313,19 +313,22 @@ def remove_speech_markers(
         )
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
 
-        # Normalize speaker pauses / self-repairs into a spaced em dash
+        # Add a space around em dashes to avoid merging words together (e.g., "word—word" -> "word — word")
+        text, orig_to_clean = regex_replace_with_span_map(text, r"—", " — ")
+        spans = [remap_span(span, orig_to_clean, text) for span in spans]
+        # Normalize double hyphen (speaker pauses / self-repairs) into a spaced em dash (e.g., "word--word" -> "word — word")
         text, orig_to_clean = regex_replace_with_span_map(text, r"--", " — ")
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
-        # Remove content in square brackets
+        # Remove content in square brackets (e.g., "[laughter]" or "[applause]")
         text, orig_to_clean = regex_clean_with_span_map(text, r"\[.*\]")
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
-        # Remove content in parentheses
+        # Remove content in parentheses (e.g., "(inaudible)" or "(crosstalk)")
         text, orig_to_clean = regex_clean_with_span_map(text, r"\(.*\)")
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
-        # Replace multiple spaces with a single space
+        # Replace multiple spaces with a single space (e.g., "word   word" -> "word word")
         text, orig_to_clean = regex_replace_with_span_map(text, r"\s\s+", " ")
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
-        # Trim remaining edge whitespace after cleanup.
+        # Trim remaining edge whitespace after cleanup
         text, orig_to_clean = strip_boundary_sequences_with_span_map(text, (), ())
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
         df_cleaned.loc[i, text_col] = text
