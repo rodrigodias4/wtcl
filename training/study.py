@@ -10,6 +10,7 @@ import pandas as pd
 import torch
 import optuna
 
+from study_analysis import plot_result_per_hparam, plot_result_per_trial
 from train import (
     PATIENCE,
     RANDOM_SEED,
@@ -91,6 +92,8 @@ def save_study_results(study, outdir):
     }
     with (outdir / "study_results.json").open("w") as f:
         json.dump(study_results, f, indent=4)
+
+    return study_results
 
 
 def callback(study: optuna.Study, trial: optuna.Trial):
@@ -391,7 +394,7 @@ def main():
     progress.remove_task(progress_task_trials)
     progress.stop()
 
-    save_study_results(study, study_output_dir)
+    study_results = save_study_results(study, study_output_dir)
     console.print(f"Study results saved to {study_output_dir / 'study_results.json'}")
 
     console.rule(f"Study Results")
@@ -402,6 +405,10 @@ def main():
         console.print(f"‣ {key}: {value}")
         for key, value in study.best_trial.params.items()
     ]
+
+    # Plot the results of the study
+    plot_result_per_trial(study_results, study_output_dir / "output")
+    plot_result_per_hparam(study_results, study_output_dir / "output")
 
     del study  # Free up memory
 
