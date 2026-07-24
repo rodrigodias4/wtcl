@@ -1101,6 +1101,7 @@ def print_overall_results(results: dict) -> None:
         f"I-P={results['overall']['test']['I']['precision']:.1%} "
         f"I-R={results['overall']['test']['I']['recall']:.1%} "
         f"O-F1={results['overall']['test']['O']['f1']:.1%} "
+        f"J={results['overall']['test']['macro']['jaccard']:.1%}"
     )
 
     # Print overall span-level test metrics

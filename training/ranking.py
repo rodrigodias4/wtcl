@@ -7,9 +7,9 @@ from rich.table import Table
 from utils import console, progress
 
 script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-dataset_name = "wtcl-v1"
-models_dir = script_dir / "models" / dataset_name
+models_dir = script_dir / "models"
 models = []
+dataset_name = ""
 
 
 def parse_args():
@@ -17,9 +17,14 @@ def parse_args():
         description="Rank models based on validation and test performance."
     )
     parser.add_argument(
-        "--transformer_name",
+        "--transformer-name",
         help="Name of the transformer for which to rank models.",
         required=True,
+    )
+    parser.add_argument(
+        "--dataset-name",
+        help="Name of the dataset for which to rank models.",
+        default="wtcl-v2",
     )
     return parser.parse_args()
 
@@ -45,10 +50,8 @@ def collect_model_results(transformer_dir):
             )
             continue
 
-        if model_results["overall"].get("validation", None) is not None:
-            validation_results = model_results["overall"]["validation"]
-        if model_results["overall"].get("test", None) is not None:
-            test_results = model_results["overall"]["test"]
+        validation_results = model_results["overall"].get("validation", {})
+        test_results = model_results["overall"].get("test", {})
 
         models.append(
             {
@@ -58,8 +61,11 @@ def collect_model_results(transformer_dir):
             }
         )
 
+    models_with_validation = [m for m in models if m["validation"]]
     models_ranked_by_validation = sorted(
-        models, key=lambda x: x["validation"]["macro"]["f1"], reverse=True
+        models_with_validation,
+        key=lambda x: x["validation"]["macro"]["f1"],
+        reverse=True,
     )
     models_ranked_by_test = sorted(
         models, key=lambda x: x["test"]["macro"]["f1"], reverse=True
@@ -142,8 +148,10 @@ def fill_test_table(table, models_ranked_by_test):
 
 
 def main():
+    global dataset_name
     args = parse_args()
-    transformer_dir = models_dir / args.transformer_name
+    dataset_name = args.dataset_name
+    transformer_dir = models_dir / dataset_name / args.transformer_name
     if not transformer_dir.is_dir():
         console.print(
             f"Transformer directory for {args.transformer_name} does not exist."
