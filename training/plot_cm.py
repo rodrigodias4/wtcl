@@ -99,16 +99,18 @@ def compute_metrics_span_level(all_preds: list, all_labels: list) -> dict:
     assert len(all_labels) == len(
         all_preds
     ), "Number of sequences in predictions and labels must be the same."
-    for i in range(len(all_preds)):
-        all_labels[i] = all_labels[i][
-            : len(all_preds[i])
-        ]  # Truncate labels to match the length of predictions (remove padding)
-        all_labels[i] = [
-            id2label_seqeval[label_id] for label_id in all_labels[i]
-        ]  # Convert label IDs to label names
-        all_preds[i] = [
-            id2label_seqeval[label_id] for label_id in all_preds[i]
-        ]  # Convert prediction IDs to label names
+
+    if isinstance(all_preds, list) and isinstance(all_preds[0], list):
+        for i in range(len(all_preds)):
+            all_labels[i] = [
+                id2label_seqeval[label_id] for label_id in all_labels[i]
+            ]  # Convert label IDs to label names
+            all_preds[i] = [
+                id2label_seqeval[label_id] for label_id in all_preds[i]
+            ]  # Convert prediction IDs to label names
+    else:
+        all_labels = [id2label_seqeval[label_id] for label_id in all_labels]
+        all_preds = [id2label_seqeval[label_id] for label_id in all_preds]
 
     # Exact match evaluation using seqeval
     report = seqeval_classification_report(
