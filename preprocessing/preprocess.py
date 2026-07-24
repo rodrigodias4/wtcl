@@ -96,8 +96,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--min-words",
         type=int,
-        default=4,
-        help="Minimum number of words required to keep a turn (default: 4)",
+        default=3,
+        help="Minimum number of words required to keep a turn (default: 3)",
     )
     return parser.parse_args(argv)
 
@@ -149,11 +149,7 @@ def min_words(
     """Filter turns by minimum word count."""
     df_min_words = df.copy()
     for i, row in df.iterrows():
-        if (
-            _word_count(row[text_col]) < min_words
-            and row["spans"] == "[]"
-            and row[text_col].endswith("-")
-        ):
+        if _word_count(row[text_col]) < min_words and row["spans"] == "[]":
             console.print(
                 f"Removing row {row['id']} from {row[debate_col]} with text: {row[text_col]!r} (word count: {_word_count(row[text_col])}) (spans: {row['spans']})"
             )
@@ -313,7 +309,7 @@ def remove_speech_markers(
         )
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
 
-        # Add a space around em dashes to avoid merging words together (e.g., "word—word" -> "word — word")
+        # Add a space around em dashes to avoid merging words together (e.g., "word—word" -> "word — word"); The cases where the em dash is already surrounded by spaces create additional space, but those are normalized later by the whitespace normalization step
         text, orig_to_clean = regex_replace_with_span_map(text, r"—", " — ")
         spans = [remap_span(span, orig_to_clean, text) for span in spans]
         # Normalize double hyphen (speaker pauses / self-repairs) into a spaced em dash (e.g., "word--word" -> "word — word")
@@ -378,6 +374,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         debate_col=args.debate_col,
         speaker_col=args.speaker_col,
         text_col=args.text_col,
+        min_words=args.min_words,
     )
     console.print(f"Removed {removed} moderator turns")
 

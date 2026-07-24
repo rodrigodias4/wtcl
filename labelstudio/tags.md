@@ -12,18 +12,18 @@ Each annotated span may receive labels from three independent dimensions:
 
 # 1. reason_form (Claim Structure)
 
-| Tag                      | Definition                                                | Include when                                      | Exclude when                                                      |
-| ------------------------ | --------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------- |
-| quantitative precise     | Exact numeric value or measurement                        | “inflation is 4.2%”, “5,000 people died”          | vague estimates                                                   |
-| quantitative approximate | Non-exact numeric magnitude                               | “about 5,000”, “nearly half”, “tens of thousands” | exact numbers                                                     |
-| quantitative vague       | Ambiguous or vague non-numeric quantifiers                | "a big percentage", "many people"                 | numeric quantities                                                |
-| non-quantitative fact    | Discrete factual assertion without quantitative structure | “the law passed”, “the president resigned”        | numeric or comparative claims                                     |
-| forecast                 | Statement about future state of affairs                   | “will increase”, “expected to rise”               | past or present facts                                             |
-| comparison               | Explicit relational comparison between entities           | “higher than”, “less than”, “as large as”         | standalone facts                                                  |
-| temporal reference       | Anchoring in time without describing change               | “in 2020”, “last year”, “during WW2”              | vague temporal descriptors (e.g. "over the last number of years") |
-| trend/change             | Describes evolution across time                           | “rose over time”, “declined since 2010”           | single-time-point facts                                           |
-| ranking                  | Ordered position in a set                                 | “first”, “top 3”, “ranked highest”                | non-ordered comparisons                                           |
-| causation                | Explicit cause-effect relation                            | “X caused Y”, “due to X, Y happened”              | correlation or temporal sequence                                  |
+| Tag                      | Definition                                                          | Include when                                       | Exclude when                                                      |
+| ------------------------ | ------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------- |
+| quantitative precise     | Exact numeric value or measurement                                  | “inflation is 4.2%”, “5,000 people died”           | vague estimates                                                   |
+| quantitative approximate | Non-exact numeric magnitude                                         | “about 5,000”, “nearly half”, “tens of thousands”  | exact numbers                                                     |
+| quantitative vague       | Ambiguous or vague non-numeric quantifiers                          | "a big percentage", "many people"                  | numeric quantities                                                |
+| non-quantitative fact    | Discrete factual assertion without quantitative structure           | “the law passed”, “the president resigned”         | numeric or comparative claims                                     |
+| forecast                 | Statement about future, predicted and extrapolated state of affairs | “will increase”, “expected to rise”, "would cause" | past or present facts                                             |
+| comparison               | Explicit relational comparison between entities                     | “higher than”, “less than”, “as large as”          | standalone facts                                                  |
+| temporal reference       | Anchoring in time without describing change                         | “in 2020”, “last year”, “during WW2”               | vague temporal descriptors (e.g. "over the last number of years") |
+| trend/change             | Describes evolution across time                                     | “rose over time”, “declined since 2010”            | single-time-point facts                                           |
+| ranking                  | Ordered position in a set                                           | “first”, “top 3”, “ranked highest”                 | non-ordered comparisons                                           |
+| causation                | Explicit cause-effect relation                                      | “X caused Y”, “due to X, Y happened”               | correlation or temporal sequence                                  |
 
 ---
 

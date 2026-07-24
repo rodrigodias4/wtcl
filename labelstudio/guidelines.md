@@ -24,6 +24,8 @@ Exclude any material that does not contribute to the factual meaning of the asse
 
 This includes conversational fillers, discourse markers, rhetorical framing, parenthetical remarks, evidential expressions, and other text that does not affect the truth conditions of the claim.
 
+However, include the grammatical subject and auxiliary verbs when they are part of that proposition. Do not attempt to remove introductory words such as "we have" or "there are" based on semantic interpretation, as this leads to inconsistent boundaries.
+
 ### Consistency
 
 Identical linguistic constructions shall be annotated according to the same rule throughout the corpus.
@@ -229,6 +231,12 @@ When a generic head noun (someone, person, individual, people, those who, etc.) 
 
 > the same individual **who defended...**
 
+If a check-worthy span raised from a relative clause follows a separate topical framing clause, start the span from the relative pronoun.
+
+> like Charlottesville, **where there were...**
+
+> since the Spanish Flu, **which killed...**
+
 ## Subjects and Determiners
 
 Include complete noun phrases functioning as the grammatical subject.
@@ -335,6 +343,12 @@ unless they contain an embedded factual assertion satisfying the annotation crit
 ## Punctuation
 
 Punctuation (e.g., ., !, ?) should not be included in annotated spans unless it forms part of the lexical representation of a token (e.g., decimal points, abbreviations, contractions) or the claim spans multiple sentences. Trailing and leading punctuation is never annotated.
+
+## Intentions and Policy Commitments
+
+Annotate specific policy commitments, campaign promises, and concrete future actions when they describe an identifiable, verifiable proposal or commitment.
+Those can be checked against campaign manifestos and previous past commitments, for example.
+Do not annotate vague aspirations, intentions, or value statements that lack a specific policy or measurable outcome
 
 ## Boundary Resolution
 
