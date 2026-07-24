@@ -68,10 +68,14 @@ SPEAKER_PARTY = {
     "TRUMP": "R",
     "HARRIS": "D",
 }
-
 PARTY_COLOR = {
     "D": "#3176b7",
     "R": "#d1495b",
+}
+UNKNOWN_PARTY_COLOR = "#7a7a7a"
+PARTY_FULLNAME = {
+    "D": "Democrat",
+    "R": "Republican",
 }
 
 
@@ -683,6 +687,15 @@ def _debate_year_label(debate_id: Any) -> str:
     return match.group(0) if match else text
 
 
+def _party_for_speaker(speaker: Any) -> str:
+    return SPEAKER_PARTY.get(_normalize_speaker(speaker), "UNKNOWN")
+
+
+def _color_for_speaker(speaker: Any) -> str:
+    party = _party_for_speaker(speaker)
+    return PARTY_COLOR.get(party, UNKNOWN_PARTY_COLOR)
+
+
 def _decorate_axis(ax: plt.Axes, title: str, xlabel: str, ylabel: str) -> None:
     ax.set_title(title)
     ax.set_xlabel(xlabel)
@@ -1046,6 +1059,185 @@ def _plot_debate_totals_by_speaker(
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "debate_total_spans_turns.png"), dpi=300)
     plt.close(fig)
+
+
+def _plot_debate_claim_span_share(
+    claim_metrics: pd.DataFrame,
+    outdir: Path,
+    title_prefix: str,
+    group_column: str,
+    filename: str,
+    title_suffix: str,
+    xlabel_suffix: str,
+    color_fn: Any,
+) -> None:
+    fig, ax = plt.subplots(figsize=(13, 7))
+
+    has_debates = (
+        not claim_metrics.empty
+        and "debate_id" in claim_metrics.columns
+        and group_column in claim_metrics.columns
+        and "span_char_len" in claim_metrics.columns
+    )
+    if not has_debates:
+        ax.text(
+            0.5,
+            0.5,
+            "No claim span data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, filename), dpi=300)
+        plt.close(fig)
+        return
+
+    source = claim_metrics.dropna(subset=["debate_id", group_column]).copy()
+    if source.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No claim span data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, filename), dpi=300)
+        plt.close(fig)
+        return
+
+    source["span_char_len"] = pd.to_numeric(source["span_char_len"], errors="coerce")
+    source = source.dropna(subset=["span_char_len"])
+    if source.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No claim span lengths available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, filename), dpi=300)
+        plt.close(fig)
+        return
+
+    debate_order = pd.unique(source["debate_id"]).tolist()
+    pivot = source.pivot_table(
+        index="debate_id",
+        columns=group_column,
+        values="span_char_len",
+        aggfunc="sum",
+        fill_value=0,
+    )
+    pivot = pivot.reindex(debate_order, fill_value=0)
+
+    if pivot.empty or float(pivot.to_numpy(dtype=float).sum()) <= 0:
+        ax.text(
+            0.5,
+            0.5,
+            "No claim span lengths available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(_figure_path(outdir, filename), dpi=300)
+        plt.close(fig)
+        return
+
+    totals = pivot.sum(axis=1).replace(0, np.nan)
+    percent = pivot.div(totals, axis=0).fillna(0.0) * 100.0
+
+    group_order = (
+        pivot.sum(axis=0).sort_values(ascending=False).index.tolist()
+        if not pivot.empty
+        else []
+    )
+    x = np.arange(len(debate_order))
+    bottoms = np.zeros(len(debate_order), dtype=float)
+
+    for group in group_order:
+        values = percent[group].to_numpy(dtype=float)
+        if np.all(values == 0):
+            continue
+        ax.bar(
+            x,
+            values,
+            bottom=bottoms,
+            color=color_fn(group),
+            edgecolor="white",
+            linewidth=0.7,
+            width=0.72,
+            alpha=0.96,
+            label=PARTY_FULLNAME.get(str(group), str(group)),
+            zorder=3,
+        )
+        bottoms += values
+
+    _decorate_axis(
+        ax,
+        (
+            f"{title_prefix}Claim Span Share by {title_suffix}"
+            if title_prefix
+            else f"Claim Span Share by {title_suffix}"
+        ),
+        "Debate",
+        f"Claim span text by {xlabel_suffix} (%)",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels([_debate_year_label(debate) for debate in debate_order])
+    ax.set_ylim(0, 100)
+    ax.grid(axis="y", alpha=0.5, zorder=0)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+    if group_order:
+        legend_cols = 2 if len(group_order) > 8 else 1
+        ax.legend(
+            title=title_suffix,
+            ncol=legend_cols,
+            loc="lower right",
+        )
+
+    fig.tight_layout()
+    fig.savefig(_figure_path(outdir, filename), dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_debate_claim_span_share_by_party(
+    claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str
+) -> None:
+    party_source = claim_metrics.copy()
+    if party_source.empty or "speaker" not in party_source.columns:
+        _plot_debate_claim_span_share(
+            claim_metrics,
+            outdir,
+            title_prefix,
+            group_column="speaker",
+            filename="debate_claim_span_share_by_party.png",
+            title_suffix="Party",
+            xlabel_suffix="party",
+            color_fn=_color_for_speaker,
+        )
+        return
+
+    party_source["party"] = party_source["speaker"].apply(_party_for_speaker)
+    _plot_debate_claim_span_share(
+        party_source,
+        outdir,
+        title_prefix,
+        group_column="party",
+        filename="debate_claim_span_share_by_party.png",
+        title_suffix="Party",
+        xlabel_suffix="party",
+        color_fn=lambda party: PARTY_COLOR.get(str(party), UNKNOWN_PARTY_COLOR),
+    )
 
 
 def _plot_claim_density(
@@ -1649,7 +1841,7 @@ def _plot_reason_axis_rankings(
     plt.close(fig)
 
 
-def _plot_reason_choice_correlation(
+def _plot_reason_correlation(
     claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
     axis_columns = ["reason_form", "reason_frame", "reason_domain"]
@@ -1846,7 +2038,9 @@ def analyze(
     )
     for axis_name, metrics in reason_axis_metrics.items():
         _plot_reason_axis_rankings(metrics, axis_name, outdir, title_prefix=prefix)
-    _plot_reason_choice_correlation(claim_metrics, outdir, title_prefix=prefix)
+    _plot_reason_correlation(claim_metrics, outdir, title_prefix=prefix)
+
+    _plot_debate_claim_span_share_by_party(claim_metrics, outdir, title_prefix=prefix)
 
     print(f"Analyzed {len(turn_metrics)} turns and {len(claim_metrics)} claims")
     if not speaker_metrics.empty:

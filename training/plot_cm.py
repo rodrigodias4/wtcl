@@ -16,6 +16,19 @@ from seqeval.metrics import (
 )
 
 
+def dict_flatten(all_preds: dict, all_labels: dict) -> list:
+    all_preds_dict = all_preds
+    all_labels_dict = all_labels
+    all_preds = []
+    all_labels = []
+
+    for key in sorted(all_preds_dict.keys()):
+        all_preds.extend(all_preds_dict[key])
+        all_labels.extend(all_labels_dict[key])
+
+    return all_preds, all_labels
+
+
 def plot_confusion_matrix(
     all_preds, all_labels, output_path: Path, normalize: bool = True
 ):
@@ -25,13 +38,16 @@ def plot_confusion_matrix(
     y_true = []
     y_pred = []
 
+    if isinstance(all_preds, dict):
+        all_preds, all_labels = dict_flatten(all_preds, all_labels)
+
     assert len(all_labels) == len(
         all_preds
     ), "Number of sequences in predictions and labels must be the same."
     for i in range(len(all_preds)):
-        all_labels[i] = all_labels[i][
-            : len(all_preds[i])
-        ]  # Truncate labels to match the length of predictions (remove padding)
+        assert len(all_labels[i]) == len(
+            all_preds[i]
+        ), f"Length of labels and predictions must match for sequence {i}."
         all_labels[i] = [
             id2label[label_id] for label_id in all_labels[i]
         ]  # Convert label IDs to label names
@@ -71,6 +87,9 @@ def compute_metrics_span_level(all_preds: list, all_labels: list) -> dict:
     all_preds = deepcopy(all_preds)
     all_labels = deepcopy(all_labels)
     id2label_seqeval = deepcopy(id2label)
+
+    if isinstance(all_preds, dict):
+        all_preds, all_labels = dict_flatten(all_preds, all_labels)
 
     if len(label_list) == 3:
         # Handle the case where there is only one unnamed entity (B, I)

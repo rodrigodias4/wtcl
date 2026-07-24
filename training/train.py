@@ -139,6 +139,8 @@ def get_device() -> torch.device:
     return device
 
 
+DEVICE = get_device()
+
 # --------------------------------
 # Model Definition
 # --------------------------------
@@ -187,13 +189,13 @@ class WTCLModel(nn.Module):
             emission_bias[B_ID] = EMISSION_BIAS_B
             emission_bias[I_ID] = EMISSION_BIAS_I
             self.emission_bias = torch.tensor(
-                emission_bias, dtype=torch.float32, device=get_device()
+                emission_bias, dtype=torch.float32, device=DEVICE
             )
 
         hidden_size = self.transformer.config.hidden_size
 
         self.dropout = nn.Dropout(hparams["dropout"])
-        self.fc = nn.Linear(hidden_size, len(label_list), device=get_device())
+        self.fc = nn.Linear(hidden_size, len(label_list), device=DEVICE)
         self.use_crf = hparams["use_crf"]
         if self.use_crf:
             self.crf = CRF(len(label_list), batch_first=True)
@@ -320,7 +322,7 @@ def encode(
     text: str,
     spans: list[dict],
     tokenizer: AutoTokenizer,
-    max_length: int,
+    max_length: int = MAX_LENGTH,
 ) -> dict:
     """
     Encode text and labels for the model.
@@ -435,7 +437,7 @@ class WTCLDataset(Dataset):
             raise ValueError(
                 f"\nShape Mismatch at index {idx}!"
                 f"\nTokenizer produced {len(enc['input_ids'])} tokens: {actual_tokens}"
-                f"\nYour dataset has {len(enc['labels'])} labels: {raw_labels}"
+                f"\nDataset has {len(enc['labels'])} labels: {raw_labels}"
                 f"\nRaw Text: '{item['text']}'"
             )
 
@@ -686,7 +688,7 @@ def train(
         model_results["training_loss"].append(training_loss)
 
         if val_loader is not None:
-            preds, labels, val_loss = evaluate(model, val_loader, get_device())
+            preds, labels, val_loss = evaluate(model, val_loader, DEVICE)
             model_results["validation_loss"].append(val_loss)
             validation_metrics = compute_metrics_token_level(preds, labels)
             validation_metrics["span"] = compute_metrics_span_level(preds, labels)
@@ -783,10 +785,10 @@ def train_lodo(
     console.print(f"Leave-one-debate-out training on {len(all_debates)} debates.")
     console.print(f"Validation enabled: {val}")
 
-    all_test_preds = []
-    all_test_labels = []
-    all_validation_preds = []
-    all_validation_labels = []
+    all_test_preds = {debate: [] for debate in all_debates}
+    all_test_labels = {debate: [] for debate in all_debates}
+    all_validation_preds = {debate: [] for debate in all_debates} if val else {}
+    all_validation_labels = {debate: [] for debate in all_debates} if val else {}
     mixed_precision_dtype = mp_str_to_dtype.get(hparams["mixed_precision_dtype"])
 
     if model_output_dir is not None:
@@ -828,9 +830,6 @@ def train_lodo(
         else:
             train_data = df[df["debate_id"] != test_debate]
             total_size = len(train_data) + len(test_data)
-            # assert not (
-            #     train_data["debate_id"] == test_debate
-            # ).any(), "Training debates should not include test debate"
             console.print(
                 f"Split sizes: {len(train_data)} - {len(test_data)} // {len(train_data)/total_size:.1%} - {len(test_data)/total_size:.1%}"
             )
@@ -877,7 +876,7 @@ def train_lodo(
             )
 
         # Create new model instance for each CV fold
-        model = build_model(model_name, hparams).to(get_device())
+        model = build_model(model_name, hparams).to(DEVICE)
 
         # Set up optimizer and scheduler
         optimizer = get_optimizer(model, hparams)
@@ -896,7 +895,7 @@ def train_lodo(
             train_loader,
             optimizer,
             scheduler,
-            get_device(),
+            DEVICE,
             hparams["num_epochs"],
             val_loader=val_loader,
             mixed_precision_dtype=mixed_precision_dtype,
@@ -918,9 +917,9 @@ def train_lodo(
 
         # Evaluate the best model state on the test debate
         model.load_state_dict(best_model_state)
-        preds, labels, _ = evaluate(model, test_loader, get_device())
-        all_test_preds.extend(preds)
-        all_test_labels.extend(labels)
+        preds, labels, _ = evaluate(model, test_loader, DEVICE)
+        all_test_preds[test_debate].extend(preds)
+        all_test_labels[test_debate].extend(labels)
 
         # Compute token-level metrics for the test split
         test_metrics = compute_metrics_token_level(preds, labels)
@@ -934,8 +933,8 @@ def train_lodo(
             ][model_results["best_epoch"] - 1]
 
             # Store validation predictions and labels for confusion matrix plotting
-            all_validation_preds.extend(validation_preds)
-            all_validation_labels.extend(validation_labels)
+            all_validation_preds[test_debate].extend(validation_preds)
+            all_validation_labels[test_debate].extend(validation_labels)
 
         # Compute span-level metrics for the test split
         span_metrics = compute_metrics_span_level(preds, labels)
@@ -1092,42 +1091,42 @@ def print_overall_results(results: dict) -> None:
     # Print overall token-level test metrics
     console.print(
         f"\nOverall test metrics: "
-        f"F1={results['overall']['test']['macro']['f1']:.2%}, "
-        f"P={results['overall']['test']['macro']['precision']:.1%}, "
-        f"R={results['overall']['test']['macro']['recall']:.1%}"
-        f"B-F1={results['overall']['test']['B']['f1']:.1%}, "
-        f"B-P={results['overall']['test']['B']['precision']:.1%}, "
-        f"B-R={results['overall']['test']['B']['recall']:.1%}"
-        f"I-F1={results['overall']['test']['I']['f1']:.1%}, "
-        f"I-P={results['overall']['test']['I']['precision']:.1%}, "
-        f"I-R={results['overall']['test']['I']['recall']:.1%}"
-        f"O-F1={results['overall']['test']['O']['f1']:.1%}, "
+        f"F1={results['overall']['test']['macro']['f1']:.2%} "
+        f"P={results['overall']['test']['macro']['precision']:.1%} "
+        f"R={results['overall']['test']['macro']['recall']:.1%} "
+        f"B-F1={results['overall']['test']['B']['f1']:.1%} "
+        f"B-P={results['overall']['test']['B']['precision']:.1%} "
+        f"B-R={results['overall']['test']['B']['recall']:.1%} "
+        f"I-F1={results['overall']['test']['I']['f1']:.1%} "
+        f"I-P={results['overall']['test']['I']['precision']:.1%} "
+        f"I-R={results['overall']['test']['I']['recall']:.1%} "
+        f"O-F1={results['overall']['test']['O']['f1']:.1%} "
     )
 
     # Print overall span-level test metrics
     console.print(
         f"Overall span-level test metrics: "
-        f"F1={results['overall']['test']['span']['f1']:.1%}, "
-        f"P={results['overall']['test']['span']['precision']:.1%}, "
-        f"R={results['overall']['test']['span']['recall']:.1%}, "
+        f"F1={results['overall']['test']['span']['f1']:.2%} "
+        f"P={results['overall']['test']['span']['precision']:.1%} "
+        f"R={results['overall']['test']['span']['recall']:.1%} "
     )
 
     # Print overall token-level validation metrics
     if results["overall"].get("validation") is not None:
         console.print(
             f"Overall validation metrics: "
-            f"F1={results['overall']['validation']['macro']['f1']:.1%}, "
-            f"P={results['overall']['validation']['macro']['precision']:.1%}, "
-            f"R={results['overall']['validation']['macro']['recall']:.1%}"
-            f"B-F1={results['overall']['validation']['B']['f1']:.1%}, "
-            f"B-P={results['overall']['validation']['B']['precision']:.1%}, "
-            f"B-R={results['overall']['validation']['B']['recall']:.1%}, "
-            f"I-F1={results['overall']['validation']['I']['f1']:.1%}, "
-            f"I-P={results['overall']['validation']['I']['precision']:.1%}, "
-            f"I-R={results['overall']['validation']['I']['recall']:.1%}, "
-            f"O-F1={results['overall']['validation']['O']['f1']:.1%}, "
-            f"S-F1={results['overall']['validation']['span']['f1']:.1%}, "
-            f"J={results['overall']['validation']['macro']['jaccard']:.1%}"
+            f"F1={results['overall']['validation']['macro']['f1']:.2%} "
+            f"P={results['overall']['validation']['macro']['precision']:.1%} "
+            f"R={results['overall']['validation']['macro']['recall']:.1%} "
+            f"B-F1={results['overall']['validation']['B']['f1']:.1%} "
+            f"B-P={results['overall']['validation']['B']['precision']:.1%} "
+            f"B-R={results['overall']['validation']['B']['recall']:.1%} "
+            f"I-F1={results['overall']['validation']['I']['f1']:.1%} "
+            f"I-P={results['overall']['validation']['I']['precision']:.1%} "
+            f"I-R={results['overall']['validation']['I']['recall']:.1%} "
+            f"O-F1={results['overall']['validation']['O']['f1']:.1%} "
+            f"S-F1={results['overall']['validation']['span']['f1']:.1%} "
+            f"J={results['overall']['validation']['macro']['jaccard']:.1%} "
         )
 
 
@@ -1159,7 +1158,7 @@ def process_results(
 
     print_overall_results(results)
 
-    if len(val_preds) > 0:
+    if val_preds:
         # Plot training and validation loss curves
         plot_train_val_loss_curves(
             results, figures_dir / "training_validation_loss_curves.png"

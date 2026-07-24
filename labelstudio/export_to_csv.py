@@ -27,6 +27,9 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from rich.console import Console
+
+console = Console()
 
 import pandas as pd
 
@@ -301,7 +304,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                     ],
                     ensure_ascii=False,
                 ),
-                "error": "",
             }
         )
 
@@ -330,7 +332,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "speaker": row["speaker"],
                 "text": row["text"],
                 "spans": row["spans"],
-                "error": row["error"],
             }
             for row in deduped_rows
         ],
@@ -340,14 +341,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             "speaker",
             "text",
             "spans",
-            "error",
         ],
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out_df.sort_values("id", inplace=True)
     out_df.to_csv(out, index=False)
-    print(f"Removed {duplicates_removed} duplicate rows")
-    print(f"Wrote {out} ({len(out_df)} rows)")
+    console.print(f"Removed {duplicates_removed} duplicate rows")
+    console.print(f"Wrote {out} ({len(out_df)} rows)")
     return 0
 
 
