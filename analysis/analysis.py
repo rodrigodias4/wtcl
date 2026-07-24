@@ -56,6 +56,24 @@ ORDER_LAST_APPEARANCE = [
     "HARRIS",
 ]
 
+SPEAKER_PARTY = {
+    "GORE": "D",
+    "KERRY": "D",
+    "BUSH": "R",
+    "MCCAIN": "R",
+    "ROMNEY": "R",
+    "OBAMA": "D",
+    "CLINTON": "D",
+    "BIDEN": "D",
+    "TRUMP": "R",
+    "HARRIS": "D",
+}
+
+PARTY_COLOR = {
+    "D": "#3176b7",
+    "R": "#d1495b",
+}
+
 
 @dataclass
 class SpanRecord:
@@ -1229,17 +1247,12 @@ def _plot_speaker_spans_per_turn(
         df = speaker_metrics.sort_values("spans_per_turn", ascending=False)
         speakers = df["speaker"].tolist()
         x = np.arange(len(speakers))
-        n_speakers = len(speakers)
-        colormap = plt.get_cmap("PuBu_r")
-        colormap = [
-            (
-                colormap(float(idx) / float(n_speakers + 4))
-                if n_speakers > 1
-                else colormap(0.5)
-            )
-            for idx in range(n_speakers)
-        ]
-        ax.bar(x, df["spans_per_turn"], color=colormap, alpha=0.9)
+        ax.bar(
+            x,
+            df["spans_per_turn"],
+            color=[PARTY_COLOR[SPEAKER_PARTY[speaker]] for speaker in speakers],
+            alpha=0.9,
+        )
         _decorate_axis(
             ax,
             (
@@ -1280,21 +1293,12 @@ def _plot_speaker_span_coverage(
         )
         speakers = df["speaker"].tolist()
         x = np.arange(len(speakers))
-        width = 0.4
+        width = 0.8
         ax.bar(
-            x - width / 2,
-            df["span_chars_over_turn_chars_pct"],
-            width,
-            label="Chars",
-            color="#20578b",
-            alpha=0.9,
-        )
-        ax.bar(
-            x + width / 2,
+            x,
             df["span_words_over_turn_words_pct"],
             width,
-            label="Words",
-            color="#6a96d2",
+            color=[PARTY_COLOR[SPEAKER_PARTY[speaker]] for speaker in speakers],
             alpha=0.9,
         )
         _decorate_axis(
@@ -1309,7 +1313,6 @@ def _plot_speaker_span_coverage(
         )
         ax.set_xticks(x)
         ax.set_xticklabels(speakers, rotation=30, ha="right")
-        ax.legend()
 
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "speaker_span_coverage.png"), dpi=300)
@@ -1851,7 +1854,7 @@ def analyze(
         for _, row in speaker_metrics.iterrows():
             print(
                 f"  {row['speaker']}: "
-                f"spans/turn={row['spans_per_turn']:.1%}, "
+                f"spans/turn={row['spans_per_turn']:.1f}, "
                 f"span-chars/turn-chars={row['span_chars_over_turn_chars_pct']:.2f}%, "
                 f"span-words/turn-words={row['span_words_over_turn_words_pct']:.2f}%"
             )
