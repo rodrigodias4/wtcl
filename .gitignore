@@ -225,8 +225,8 @@ training/models
 training/*.json
 training/studies
 
-labelstudio/exports/*.filtered*
-labelstudio/exports/*.chunked*
-labelstudio/exports/*.sampled*
-labelstudio/exports/project-*
+annotation/exports/*.filtered*
+annotation/exports/*.chunked*
+annotation/exports/*.sampled*
+annotation/exports/project-*
 **/temp*

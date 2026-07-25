@@ -1443,6 +1443,10 @@ def _plot_speaker_spans_per_turn(
             x,
             df["spans_per_turn"],
             color=[PARTY_COLOR[SPEAKER_PARTY[speaker]] for speaker in speakers],
+            label=[
+                PARTY_FULLNAME.get(SPEAKER_PARTY[speaker], "Unknown")
+                for speaker in speakers
+            ],
             alpha=0.9,
         )
         _decorate_axis(
@@ -1458,6 +1462,7 @@ def _plot_speaker_spans_per_turn(
         ax.set_xticks(x)
         ax.set_xticklabels(speakers, rotation=30, ha="right")
         ax.yaxis.set_major_locator(MaxNLocator(integer=False))
+        ax.legend(loc="upper right", title="Party")
 
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "speaker_spans_per_turn.png"), dpi=300)
@@ -1491,6 +1496,10 @@ def _plot_speaker_span_coverage(
             df["span_words_over_turn_words_pct"],
             width,
             color=[PARTY_COLOR[SPEAKER_PARTY[speaker]] for speaker in speakers],
+            label=[
+                PARTY_FULLNAME.get(SPEAKER_PARTY[speaker], "Unknown")
+                for speaker in speakers
+            ],
             alpha=0.9,
         )
         _decorate_axis(
@@ -1505,7 +1514,7 @@ def _plot_speaker_span_coverage(
         )
         ax.set_xticks(x)
         ax.set_xticklabels(speakers, rotation=30, ha="right")
-
+        ax.legend(loc="upper right", title="Party")
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "speaker_span_coverage.png"), dpi=300)
     plt.close(fig)
