@@ -287,11 +287,19 @@ def remove_speech_markers(
         if not new:
             return None
 
-        return {
+        remapped = {
             "start": min(new),
             "end": max(new) + 1,
             "text": text[min(new) : max(new) + 1],
         }
+        if span.get("reason_form"):
+            remapped["reason_form"] = span["reason_form"]
+        if span.get("reason_frame"):
+            remapped["reason_frame"] = span["reason_frame"]
+        if span.get("reason_domain"):
+            remapped["reason_domain"] = span["reason_domain"]
+
+        return remapped
 
     df_cleaned = df.copy()
     for i, row in df.iterrows():
