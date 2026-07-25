@@ -59,13 +59,18 @@ def _get_tag_counts(df):
 
 def plot_tag_distribution(plot_data: pd.DataFrame, output_dir: Path):
     ax = plot_data.plot(
-        kind="bar", stacked=True, figsize=(14, 7), edgecolor="white", zorder=3
+        kind="bar", stacked=True, figsize=(12, 6), edgecolor="white", zorder=3
     )
 
     plt.xlabel("Debate")
     plt.ylabel("Token Count")
     plt.title("BIO Tag Distribution per Debate")
-    plt.xticks(rotation=45, ha="right")
+    plt.xticks(
+        range(len(plot_data.index)),
+        [index[:4] for index in plot_data.index],
+        rotation=0,
+        ha="center",
+    )
     plt.grid(axis="y", alpha=0.5, zorder=0)
     plt.legend(title="Tag")
     plt.tight_layout()
@@ -112,6 +117,17 @@ def main():
     turn_with_at_least_one_claim = sum(v for k, v in claims_per_turn.items() if k > 0)
     console.print(
         f"Turns with at least one claim: {turn_with_at_least_one_claim} ({(turn_with_at_least_one_claim / len(df)):.1%})"
+    )
+
+    average_B_per_debate = plot_data["B"].sum() / len(plot_data)
+    average_I_per_debate = plot_data["I"].sum() / len(plot_data)
+    average_O_per_debate = plot_data["O"].sum() / len(plot_data)
+    average_tokens_per_debate = plot_data.sum(axis=1).mean()
+    console.print(
+        f"Average labels per debate: "
+        f"B: {plot_data['B'].sum() / len(plot_data):.2f} ({average_B_per_debate / average_tokens_per_debate:.1%}), "
+        f"I: {plot_data['I'].sum() / len(plot_data):.2f} ({average_I_per_debate / average_tokens_per_debate:.1%}), "
+        f"O: {plot_data['O'].sum() / len(plot_data):.2f} ({average_O_per_debate / average_tokens_per_debate:.1%})"
     )
 
 

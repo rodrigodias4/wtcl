@@ -792,7 +792,8 @@ def train_lodo(
     mixed_precision_dtype = mp_str_to_dtype.get(hparams["mixed_precision_dtype"])
 
     if model_output_dir is not None:
-        os.makedirs(model_output_dir / "folds", exist_ok=True)
+        if save:
+            os.makedirs(model_output_dir / "folds", exist_ok=True)
         with (model_output_dir / "hyperparameters.json").open("w") as f:
             json.dump(hparams, f, indent=4, ensure_ascii=False)
 
