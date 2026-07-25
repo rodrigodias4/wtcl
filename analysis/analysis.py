@@ -28,16 +28,19 @@ import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
-
+from rich.console import Console
 import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 from matplotlib.patches import Patch
+from matplotlib.colors import ListedColormap
 import numpy as np
 import pandas as pd
 import shutil
+from colorcet import glasbey
+
+matplotlib.use("Agg")
+console = Console()
 
 IGNORE_MODERATORS = True
 
@@ -1977,6 +1980,87 @@ def _plot_reason_correlation(
     plt.close(fig)
 
 
+def _plot_reason_domain_per_debate(
+    claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str
+):
+    axis_name = "reason_domain"
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    records: List[Dict[str, Any]] = []
+    for _, row in claim_metrics.iterrows():
+        debate_id = row.get("debate_id")
+        for choice in _parse_reason_choices(row.get("reason_domain")):
+            records.append({"reason_domain": choice, "debate_id": debate_id})
+
+    choice_counts = (
+        pd.DataFrame(records)
+        .groupby(["reason_domain", "debate_id"], dropna=False)
+        .size()
+        .reset_index(name="count")
+    )
+
+    pivot = choice_counts.pivot_table(
+        index="debate_id",
+        columns="reason_domain",
+        values="count",
+        aggfunc="sum",
+        fill_value=0,
+    ).astype(int)
+    totals = pivot.sum(axis=1)
+
+    percent = pivot.div(totals, axis=0).fillna(0.0) * 100.0
+
+    group_order = sorted(pivot.columns.tolist())
+    x = np.arange(len(pivot.index))
+    bottoms = np.zeros(len(pivot.index), dtype=float)
+    colors = glasbey[: len(group_order)]
+
+    for group in group_order:
+        values = percent[group].to_numpy(dtype=float)
+        color = colors[group_order.index(group)]
+        if np.all(values == 0):
+            continue
+        ax.bar(
+            x,
+            values,
+            bottom=bottoms,
+            edgecolor="white",
+            linewidth=0.3,
+            width=0.72,
+            alpha=0.96,
+            label=group,
+            zorder=3,
+            color=color,
+        )
+        bottoms += values
+
+    _decorate_axis(
+        ax,
+        None,
+        "Debate",
+        f"% of Total Domain Tags per Debate",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels([_debate_year_label(debate) for debate in pivot.index])
+    ax.grid(axis="y", alpha=0.5, zorder=0)
+    ax.set_ylim(0, 100)
+    ax.legend(
+        title="Domain Tag",
+        ncol=2,
+        loc="upper left",
+        bbox_to_anchor=(1.0, 1.0),
+        fontsize=9,
+        title_fontsize=10,
+    )
+    fig.tight_layout()
+    plt.savefig(
+        _figure_path(outdir, f"reason_domain_per_debate.png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
 def _write_tables(
     turn_metrics: pd.DataFrame,
     claim_metrics: pd.DataFrame,
@@ -2023,19 +2107,20 @@ def analyze(
         "reason_domain": _compute_reason_axis_metrics(claim_metrics, "reason_domain"),
     }
 
-    """ _write_tables(
+    """ (outdir / "tables").mkdir(parents=True, exist_ok=True)
+    _write_tables(
         turn_metrics,
         claim_metrics,
         speaker_metrics,
         reason_axis_metrics,
-        outdir,
+        outdir / "tables",
     )
     _save_summary(
         turn_metrics,
         claim_metrics,
         speaker_metrics,
         reason_axis_metrics,
-        outdir,
+        outdir / "tables",
     ) """
 
     prefix = f"{title_prefix} - " if title_prefix else ""
@@ -2059,18 +2144,19 @@ def analyze(
     _plot_reason_correlation(claim_metrics, outdir, title_prefix=prefix)
 
     _plot_debate_claim_span_share_by_party(claim_metrics, outdir, title_prefix=prefix)
+    _plot_reason_domain_per_debate(claim_metrics, outdir, title_prefix=prefix)
 
-    print(f"Analyzed {len(turn_metrics)} turns and {len(claim_metrics)} claims")
-    if not speaker_metrics.empty:
-        print("Per-speaker check-worthy metrics:")
+    console.print(f"Analyzed {len(turn_metrics)} turns and {len(claim_metrics)} claims")
+    """ if not speaker_metrics.empty:
+        console.print("Per-speaker check-worthy metrics:")
         for _, row in speaker_metrics.iterrows():
-            print(
+            console.print(
                 f"  {row['speaker']}: "
                 f"spans/turn={row['spans_per_turn']:.1f}, "
                 f"span-chars/turn-chars={row['span_chars_over_turn_chars_pct']:.2f}%, "
                 f"span-words/turn-words={row['span_words_over_turn_words_pct']:.2f}%"
-            )
-    print(f"Wrote outputs to {outdir}")
+            ) """
+    console.print(f"Wrote outputs to {outdir}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
