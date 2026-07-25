@@ -697,7 +697,7 @@ def _color_for_speaker(speaker: Any) -> str:
 
 
 def _decorate_axis(ax: plt.Axes, title: str, xlabel: str, ylabel: str) -> None:
-    ax.set_title(title)
+    # ax.set_title(title)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.grid(True, alpha=0.2, zorder=0)
@@ -864,7 +864,7 @@ def _plot_debate_totals_by_speaker(
     outdir: Path,
     title_prefix: str,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(13, 7))
+    fig, ax = plt.subplots(figsize=(11, 6))
 
     has_turn_debates = not turn_metrics.empty and "debate_id" in turn_metrics.columns
     has_claim_debates = not claim_metrics.empty and "debate_id" in claim_metrics.columns
@@ -1071,7 +1071,7 @@ def _plot_debate_claim_span_share(
     xlabel_suffix: str,
     color_fn: Any,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(13, 7))
+    fig, ax = plt.subplots(figsize=(11, 6))
 
     has_debates = (
         not claim_metrics.empty
@@ -1257,7 +1257,7 @@ def _plot_claim_density(
         plot_fn: Any,
         use_colorbar: bool = False,
     ) -> None:
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(5, 4))
         if clean.empty:
             ax.text(
                 0.5,
@@ -1280,7 +1280,7 @@ def _plot_claim_density(
         plt.close(fig)
 
     def _plot_span_occupancy_histogram(path: Path, title: str) -> None:
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(8, 5))
         if clean.empty:
             ax.text(
                 0.5,
@@ -1424,7 +1424,7 @@ def _plot_claim_density(
 def _plot_speaker_spans_per_turn(
     speaker_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(7, 5))
 
     if speaker_metrics.empty:
         ax.text(
@@ -1475,7 +1475,7 @@ def _plot_speaker_spans_per_turn(
 def _plot_speaker_span_coverage(
     speaker_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(7, 5))
 
     if speaker_metrics.empty:
         ax.text(
@@ -1528,7 +1528,7 @@ def _plot_speaker_span_coverage(
 def _plot_speaker_span_count(
     speaker_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(7, 5))
 
     if speaker_metrics.empty:
         ax.text(
@@ -1775,7 +1775,11 @@ def _plot_reason_axis_rankings(
     outdir: Path,
     title_prefix: str,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(13, 7))
+    if axis_name == "reason_domain":
+        figsize = (13, 7)
+    else:
+        figsize = (8, 5)
+    fig, ax = plt.subplots(figsize=figsize)
 
     axis_label = axis_name.replace("_", " ").title()
     if reason_axis_metrics.empty:
@@ -1944,13 +1948,13 @@ def _plot_reason_correlation(
     ax.set_yticks(np.arange(len(all_labels)))
     ax.set_xticklabels(all_labels, rotation=45, ha="right")
     ax.set_yticklabels(all_labels)
-    ax.set_title(
+    """ ax.set_title(
         (
             f"{title_prefix}Reason Choice Correlation by Axis"
             if title_prefix
             else "Reason Choice Correlation by Axis"
         )
-    )
+    ) """
 
     for i in range(len(all_labels)):
         for j in range(len(all_labels)):
@@ -2019,7 +2023,7 @@ def analyze(
         "reason_domain": _compute_reason_axis_metrics(claim_metrics, "reason_domain"),
     }
 
-    _write_tables(
+    """ _write_tables(
         turn_metrics,
         claim_metrics,
         speaker_metrics,
@@ -2032,7 +2036,7 @@ def analyze(
         speaker_metrics,
         reason_axis_metrics,
         outdir,
-    )
+    ) """
 
     prefix = f"{title_prefix} - " if title_prefix else ""
     _plot_turn_lengths(turn_metrics, outdir, bins=bins, title_prefix=prefix)

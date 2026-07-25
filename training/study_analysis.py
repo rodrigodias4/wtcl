@@ -88,7 +88,7 @@ def plot_result_per_trial(study_results, outdir):
 
     plt.ylim(0, 1)
     plt.yticks(np.arange(0, 1.1, 0.1))
-    plt.title("Study Results per Trial")
+    # plt.title("Study Results per Trial")
     plt.xlabel("Trial Number")
     plt.ylabel("Macro F1")
     plt.grid(True, alpha=0.3)
@@ -151,7 +151,7 @@ def plot_result_per_hparam(study_results, outdir):
             )
         plt.ylim(0, 1)
         plt.yticks(np.arange(0, 1.1, 0.1))
-        plt.title(f"Study Results per Hyperparameter: {hparam}")
+        # plt.title(f"Study Results per Hyperparameter: {hparam}")
         plt.xlabel(f"{hparam.replace('_', ' ').capitalize()} Value")
         plt.ylabel("Macro F1")
         plt.grid(True, alpha=0.3)

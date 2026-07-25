@@ -76,7 +76,7 @@ def plot_confusion_matrix(
 
     plt.xlabel("Predicted label")
     plt.ylabel("True label")
-    plt.title("BIO Confusion Matrix")
+    # plt.title("BIO Confusion Matrix")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()

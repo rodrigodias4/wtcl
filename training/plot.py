@@ -120,7 +120,7 @@ def plot_validation_metric_curve_single(
     plt.yticks([i / 10 for i in range(11)])
     plt.ylim(0, 1)
     plt.grid(True, alpha=0.3)
-    plt.title(f"Validation {label.capitalize()}-{metric.capitalize()} per Epoch")
+    # plt.title(f"Validation {label.capitalize()}-{metric.capitalize()} per Epoch")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
@@ -179,7 +179,7 @@ def plot_train_val_loss_curves(results, output_path: Path):
     plt.ylabel("Loss")
     plt.xticks([i for i in range(1, max_epochs + 1)])
     plt.grid(alpha=0.3)
-    plt.title("Training and Validation Loss Curves")
+    # plt.title("Training and Validation Loss Curves")
     plt.grid(True)
 
     train_line = mlines.Line2D(
@@ -218,7 +218,7 @@ def plot_train_loss_curve(results, output_path: Path):
         loc="upper right",
     )
     plt.xticks(epochs)
-    plt.title("Training Loss Curve")
+    # plt.title("Training Loss Curve")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.grid(alpha=0.3)

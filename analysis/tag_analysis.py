@@ -64,7 +64,7 @@ def plot_tag_distribution(plot_data: pd.DataFrame, output_dir: Path):
 
     plt.xlabel("Debate")
     plt.ylabel("Token Count")
-    plt.title("BIO Tag Distribution per Debate")
+    # plt.title("BIO Tag Distribution per Debate")
     plt.xticks(
         range(len(plot_data.index)),
         [index[:4] for index in plot_data.index],
