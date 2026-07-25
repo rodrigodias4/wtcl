@@ -1322,7 +1322,8 @@ def _plot_claim_density(
                 alpha=0.82,
             )
 
-            finite_mask = np.isfinite(x) & np.isfinite(occupancy)
+            # Taylor approximation
+            """finite_mask = np.isfinite(x) & np.isfinite(occupancy)
             if finite_mask.sum() >= 3:
                 centered_x = x[finite_mask] - 0.5
                 centered_y = occupancy[finite_mask]
@@ -1338,7 +1339,7 @@ def _plot_claim_density(
                         linewidth=2.2,
                         linestyle="--",
                         label=f"Taylor approximation (deg {max_degree})",
-                    )
+                    ) """
 
             ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             _decorate_axis(
@@ -1462,7 +1463,9 @@ def _plot_speaker_spans_per_turn(
         ax.set_xticks(x)
         ax.set_xticklabels(speakers, rotation=30, ha="right")
         ax.yaxis.set_major_locator(MaxNLocator(integer=False))
-        ax.legend(loc="upper right", title="Party")
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        ax.legend(by_label.values(), by_label.keys(), loc="upper right", title="Party")
 
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "speaker_spans_per_turn.png"), dpi=300)
@@ -1514,7 +1517,9 @@ def _plot_speaker_span_coverage(
         )
         ax.set_xticks(x)
         ax.set_xticklabels(speakers, rotation=30, ha="right")
-        ax.legend(loc="upper right", title="Party")
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        ax.legend(by_label.values(), by_label.keys(), loc="upper right", title="Party")
     fig.tight_layout()
     fig.savefig(_figure_path(outdir, "speaker_span_coverage.png"), dpi=300)
     plt.close(fig)
