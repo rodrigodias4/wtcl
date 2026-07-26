@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import signal
 
+import numpy as np
 import pandas as pd
 import torch
 import optuna
@@ -39,30 +40,129 @@ study_output_dir: Path = None
 
 signal.signal(signal.SIGINT, handle_interrupt)
 
+LR_RANGE = (5e-6, 5e-5)
+WEIGHT_DECAY_OPTIONS = [0.0, 1e-4, 1e-3, 1e-2, 3e-2, 1e-1]
+WARMUP_RATIO_RANGE = (0.0, 0.2)
+DROPOUT_RANGE = (0.1, 0.4)
+LR_FC_MULT_RANGE = (1, 50)
+LR_CRF_MULT_RANGE = (1, 50)
+
 # -----------------------------------------
 # Hyperparameter tuning with Optuna
 # -----------------------------------------
 
 
+def load_model_as_first_trial(study: optuna.Study, model_path: str) -> None:
+    model_path = Path(model_path)
+    if not model_path.is_dir():
+        console.print(
+            f"Starting model path {model_path} does not exist or is not a directory. Ignoring."
+        )
+        return
+
+    starting_hparams_path = model_path / "hyperparameters.json"
+    if not starting_hparams_path.is_file():
+        console.print(
+            f"No hyperparameters.json found for the starting model at {starting_hparams_path}. Ignoring."
+        )
+        return
+    starting_model_results_path = model_path / "results.json"
+    if not starting_model_results_path.is_file():
+        console.print(
+            f"No results.json found for the starting model at {starting_model_results_path}. Ignoring."
+        )
+        return
+
+    with open(model_path / "results.json", "r") as f:
+        model_results = json.load(f)
+        value = model_results["overall"]["validation"]["macro"]["f1"]
+    with open(starting_hparams_path, "r") as f:
+        starting_hparams = json.load(f)
+
+    distributions = {
+        "lr": optuna.distributions.FloatDistribution(*LR_RANGE, log=True),
+        "weight_decay": optuna.distributions.CategoricalDistribution(
+            WEIGHT_DECAY_OPTIONS
+        ),
+        "warmup_ratio": optuna.distributions.FloatDistribution(*WARMUP_RATIO_RANGE),
+        "dropout": optuna.distributions.FloatDistribution(*DROPOUT_RANGE),
+        "lr_fc_mult": optuna.distributions.FloatDistribution(
+            *LR_FC_MULT_RANGE, log=True
+        ),
+        "lr_crf_mult": optuna.distributions.FloatDistribution(
+            *LR_CRF_MULT_RANGE, log=True
+        ),
+    }
+
+    params = {
+        "lr": starting_hparams["lr"],
+        "weight_decay": starting_hparams["weight_decay"],
+        "warmup_ratio": starting_hparams["warmup_ratio"],
+        "dropout": starting_hparams["dropout"],
+        "lr_fc_mult": starting_hparams["lr_fc_mult"],
+        "lr_crf_mult": starting_hparams["lr_crf_mult"],
+    }
+
+    """ intermediate_values = {
+        i: v["best_validation_metrics"]["macro"]["f1"]
+        for i, (k, v) in enumerate(model_results.items())
+        if k != "overall" and "best_validation_metrics" in v
+    } """
+
+    intermediate_values = [
+        model_results[k]["best_validation_metrics"]["macro"]["f1"]
+        for k in sorted(model_results.keys())
+        if k != "overall" and "best_validation_metrics" in model_results[k]
+    ]
+
+    intermediate_values = [
+        float(np.mean(intermediate_values[: i + 1]))
+        for i in range(len(intermediate_values))
+    ]
+
+    intermediate_values = {k: v for k, v in enumerate(intermediate_values)}
+
+    first_trial = optuna.trial.create_trial(
+        params=params,
+        distributions=distributions,
+        value=value,
+        intermediate_values=intermediate_values,
+        state=optuna.trial.TrialState.COMPLETE,
+    )
+
+    study.add_trial(first_trial)
+
+    idx = max(study_trials.keys()) + 1 if study_trials else 0
+
+    study_trials[idx] = {
+        "hparams": starting_hparams,
+        "results": model_results,
+        "deciding_metric": value,
+        "pruned": False,
+    }
+
+    console.print(
+        f"Loaded starting model from '{model_path}' as trial {idx} with value {value:.1%} and intermediate values {list(intermediate_values.values())}"
+    )
+
+    save_study_results(study, study_output_dir)
+
+
 # Hyperparameter sampling function
 def sample_hparams(trial: optuna.Trial) -> dict:
     return {
-        "lr": trial.suggest_float("lr", 5e-6, 5e-5, log=True),
-        "weight_decay": trial.suggest_categorical(
-            "weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 3e-2, 1e-1]
-        ),
-        "warmup_ratio": trial.suggest_float("warmup_ratio", 0.0, 0.2),
-        "dropout": trial.suggest_float("dropout", 0.1, 0.4),
+        "lr": trial.suggest_float("lr", *LR_RANGE, log=True),
+        "weight_decay": trial.suggest_categorical("weight_decay", WEIGHT_DECAY_OPTIONS),
+        "warmup_ratio": trial.suggest_float("warmup_ratio", *WARMUP_RATIO_RANGE),
+        "dropout": trial.suggest_float("dropout", *DROPOUT_RANGE),
         "lr_fc_mult": trial.suggest_float(
             "lr_fc_mult",
-            1,
-            50,
+            *LR_FC_MULT_RANGE,
             log=True,
         ),
         "lr_crf_mult": trial.suggest_float(
             "lr_crf_mult",
-            1,
-            50,
+            *LR_CRF_MULT_RANGE,
             log=True,
         ),
     }
@@ -209,6 +309,12 @@ def parse_args() -> argparse.Namespace:
         help="Path to JSON file with starting hyperparameters for the study.",
     )
     parser.add_argument(
+        "--starting-model",
+        type=str,
+        default=None,
+        help="Path to a pre-trained model folder to set as the first trial in the study.",
+    )
+    parser.add_argument(
         "--num-startup-trials",
         type=int,
         default=5,
@@ -275,7 +381,11 @@ def main():
 
     if args.resume_from:
         console.print(f"Resuming study from {args.resume_from}")
-        study_output_dir = Path(args.resume_from).parent
+        study_output_dir = (
+            Path(args.resume_from).parent
+            if Path(args.resume_from).is_file()
+            else Path(args.resume_from)
+        )
         study_output_path = study_output_dir / "study_results.json"
         if not study_output_path.is_file():
             console.print(
@@ -372,6 +482,10 @@ def main():
                 f"Best trial so far: {study.best_trial.number} with value: {study.best_trial.value:.1%}"
             )
 
+    if args.starting_model:
+        # Load the starting model's results and hyperparameters and add it as the first trial in the study
+        load_model_as_first_trial(study, args.starting_model)
+
     if args.starting_hparams:
         with open(args.starting_hparams, "r") as f:
             starting_hparams = json.load(f)
@@ -407,6 +521,7 @@ def main():
     ]
 
     # Plot the results of the study
+    (study_output_dir / "output").mkdir(parents=True, exist_ok=True)
     plot_result_per_trial(study_results, study_output_dir / "output")
     plot_result_per_hparam(study_results, study_output_dir / "output")
 
