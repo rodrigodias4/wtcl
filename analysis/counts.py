@@ -1,4 +1,5 @@
 import argparse
+from ast import literal_eval
 from pathlib import Path
 from typing import Optional, Sequence
 import pandas as pd
@@ -92,6 +93,30 @@ def count_total_sentences(df: pd.DataFrame, text_col: str = "text") -> None:
     console.print(f"Total sentences across all debates: {total_sentences}")
 
 
+def count_spans(df: pd.DataFrame, spans_col: str = "spans") -> None:
+    """Count the total number of spans in the spans column."""
+    total_spans = (
+        df[spans_col]
+        .apply(lambda x: len(literal_eval(x)) if pd.notnull(x) else 0)
+        .sum()
+    )
+    console.print(f"Total spans across all debates: {total_spans}")
+
+
+def count_span_percentage(df: pd.DataFrame, spans_col: str = "spans") -> None:
+    span_total_length = 0
+    text_total_length = 0
+    for i, row in df.iterrows():
+        spans = literal_eval(row[spans_col]) if pd.notnull(row[spans_col]) else []
+        text_length = len(row["text"]) if pd.notnull(row["text"]) else 0
+        span_length = sum(span["end"] - span["start"] for span in spans)
+        span_total_length += span_length
+        text_total_length += text_length
+
+    ratio = span_total_length / text_total_length if text_total_length > 0 else 0
+    console.print(f"Span % of total text length: {ratio:.2%}")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
 
@@ -119,6 +144,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Count total sentences
     count_total_sentences(df, text_col=args.text_col)
+
+    # Count total spans
+    count_spans(df, spans_col="spans")
+
+    # Count span percentage
+    count_span_percentage(df, spans_col="spans")
 
 
 if __name__ == "__main__":
