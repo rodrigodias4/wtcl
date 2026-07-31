@@ -90,6 +90,7 @@ def plot_result_per_trial(study_results, outdir):
     plt.yticks(np.arange(0, 1.1, 0.1))
     # plt.title("Study Results per Trial")
     plt.xlabel("Trial Number")
+    plt.xticks(np.arange(0, len(trial_numbers), step=max(1, len(trial_numbers) // 20)))
     plt.ylabel("Macro F1")
     plt.grid(True, alpha=0.3)
     plt.legend(handles=[max_at_trial[0]])

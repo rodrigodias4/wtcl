@@ -1,7 +1,10 @@
 from argparse import ArgumentParser
 from ast import literal_eval
+import ast
+from itertools import product
 from pathlib import Path
 import sys
+from numpy import zeros
 from pandas import read_csv
 from sklearn.metrics import cohen_kappa_score, f1_score
 from rich.console import Console
@@ -10,8 +13,84 @@ sys.path.append((Path(__file__).resolve().parent.parent / "training").as_posix()
 from train import encode, get_tokenizer
 from utils import label_list
 from plot_cm import compute_metrics_span_level
+from typing import Tuple
+from scipy.optimize import linear_sum_assignment
 
 console = Console()
+
+
+def span_iou(a: dict, b: dict) -> float:
+    """
+    IoU between two half-open spans [start, end).
+    """
+    inter = max(0, min(a["end"], b["end"]) - max(a["start"], b["start"]))
+
+    if inter == 0:
+        return 0.0
+
+    union = (a["end"] - a["start"]) + (b["end"] - b["start"]) - inter
+
+    return inter / union
+
+
+def partial_span_f1(df_gold, df_pred, threshold=0.5):
+    """
+    Compute Partial Span Precision/Recall/F1 using IoU matching.
+    """
+
+    tp = 0
+    fp = 0
+    fn = 0
+
+    for (_, row_gold), (_, row_pred) in zip(df_gold.iterrows(), df_pred.iterrows()):
+
+        gold = ast.literal_eval(row_gold["spans"])
+        pred = ast.literal_eval(row_pred["spans"])
+
+        if len(gold) == 0:
+            fp += len(pred)
+            continue
+
+        if len(pred) == 0:
+            fn += len(gold)
+            continue
+
+        cost = zeros((len(gold), len(pred)))
+
+        for i, g in enumerate(gold):
+            for j, p in enumerate(pred):
+                cost[i, j] = -span_iou(g, p)
+
+        rows, cols = linear_sum_assignment(cost)
+
+        matched_gold = set()
+        matched_pred = set()
+
+        for r, c in zip(rows, cols):
+            iou = -cost[r, c]
+
+            if iou >= threshold:
+                tp += 1
+                matched_gold.add(r)
+                matched_pred.add(c)
+
+        fn += len(gold) - len(matched_gold)
+        fp += len(pred) - len(matched_pred)
+
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "threshold": threshold,
+    }
 
 
 def parse_args():
@@ -60,25 +139,36 @@ def main():
     labels_A_flat = [label for sublist in labels_A for label in sublist]
     labels_B_flat = [label for sublist in labels_B for label in sublist]
 
-    # Compute agreement metrics
+    # Cohen's Kappa
     kappa = cohen_kappa_score(labels_A_flat, labels_B_flat)
+    console.print(f"Cohen's Kappa: {kappa}")
+
+    # Macro F1 Score
     f1 = f1_score(
         labels_A_flat,
         labels_B_flat,
         labels=list(range(len(label_list))),
         average="macro",
     )
+    console.print(f"F1 Score: {f1}")
+
+    # F1 Score for each class
     f1_classes = f1_score(
         labels_A_flat, labels_B_flat, labels=list(range(len(label_list))), average=None
     )
-    exact_span = compute_metrics_span_level(labels_A, labels_B)
-
-    console.print(f"Cohen's Kappa: {kappa}")
-    console.print(f"F1 Score: {f1}")
     for id in range(len(label_list)):
         console.print(f"F1 Score for class {label_list[id]}: {f1_classes[id]}")
 
+    # Exact Span F1
+    exact_span = compute_metrics_span_level(labels_A, labels_B)
     console.print(f"Exact Span F1: {exact_span['f1']}")
+
+    # Partial Span F1 for different IoU thresholds
+    for t in (0.25, 0.5, 0.75):
+        m = partial_span_f1(df_A, df_B, threshold=t)
+        console.print(
+            f"IoU ≥ {t:.2f}: F1 = {m['f1']:.3f} P={m['precision']:.3f} R={m['recall']:.3f}"
+        )
 
 
 if __name__ == "__main__":
