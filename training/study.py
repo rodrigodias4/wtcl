@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 import optuna
 
-from study_analysis import plot_result_per_hparam, plot_result_per_trial
+from study_plot import plot_result_per_hparam, plot_result_per_trial
 from train import (
     PATIENCE,
     RANDOM_SEED,

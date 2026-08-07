@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from numpy import zeros
 from pandas import read_csv
-from sklearn.metrics import cohen_kappa_score, f1_score
+from sklearn.metrics import classification_report, cohen_kappa_score
 from rich.console import Console
 
 sys.path.append((Path(__file__).resolve().parent.parent / "training").as_posix())
@@ -143,31 +143,29 @@ def main():
     kappa = cohen_kappa_score(labels_A_flat, labels_B_flat)
     console.print(f"Cohen's Kappa: {kappa}")
 
-    # Macro F1 Score
-    f1 = f1_score(
+    # Token-level metrics
+    token_level_metrics = classification_report(
         labels_A_flat,
         labels_B_flat,
         labels=list(range(len(label_list))),
-        average="macro",
+        output_dict=True,
     )
-    console.print(f"F1 Score: {f1}")
+    console.print(f"Macro metrics: {token_level_metrics['macro avg']}")
 
-    # F1 Score for each class
-    f1_classes = f1_score(
-        labels_A_flat, labels_B_flat, labels=list(range(len(label_list))), average=None
-    )
     for id in range(len(label_list)):
-        console.print(f"F1 Score for class {label_list[id]}: {f1_classes[id]}")
+        console.print(
+            f"Metrics for class {label_list[id]}: {token_level_metrics[str(id)]}"
+        )
 
     # Exact Span F1
     exact_span = compute_metrics_span_level(labels_A, labels_B)
-    console.print(f"Exact Span F1: {exact_span['f1']}")
+    console.print(f"Exact Span metrics: {exact_span}")
 
     # Partial Span F1 for different IoU thresholds
     for t in (0.25, 0.5, 0.75):
         m = partial_span_f1(df_A, df_B, threshold=t)
         console.print(
-            f"IoU ≥ {t:.2f}: F1 = {m['f1']:.3f} P={m['precision']:.3f} R={m['recall']:.3f}"
+            f"IoU ≥ {t:.2f}: F1 = {m['f1']:.5f} P={m['precision']:.5f} R={m['recall']:.5f}"
         )
 
 

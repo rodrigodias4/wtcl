@@ -39,21 +39,12 @@ from plot import (
     plot_train_val_loss_curves,
 )
 from plot_cm import compute_metrics_span_level, plot_confusion_matrix
-from tempered_batch_sampling import (
-    TemperedBatchSampler,
-    compute_debate_weights,
-    compute_debate_to_indices,
-    compute_debate_to_bio_scores,
-)
 from utils import (
-    BIO_TEMPERED_SAMPLING_ALPHA,
-    BIO_TEMPERED_SAMPLING_EPS,
     EMISSION_BIAS_B,
     EMISSION_BIAS_I,
     LEARNING_RATE_CRF_MULTIPLIER,
     LEARNING_RATE_FC_MULTIPLIER,
     MODEL_DEFAULT,
-    DEBATE_TEMPERED_SAMPLING_ALPHA,
     get_optimizer,
     get_validation_debate,
     handle_interrupt,
@@ -280,6 +271,7 @@ class WTCLModel(nn.Module):
 
             del logits_comp_fp32, mask_comp, labels_comp, mask
         else:
+            mask = attention_mask.bool() & crf_mask.bool()
             if labels is not None:
                 # Compute cross-entropy loss for non-CRF case
                 loss = F.cross_entropy(
@@ -292,7 +284,16 @@ class WTCLModel(nn.Module):
 
             if not self.training:
                 # Get predictions by taking the argmax of logits for non-CRF case
-                result["predictions"] = torch.argmax(logits, dim=-1).cpu().tolist()
+                predictions = torch.argmax(logits, dim=-1).cpu().tolist()
+
+                # Filter predictions to only include non-padding and first-subword tokens
+                if isinstance(predictions, list) and isinstance(predictions[0], list):
+                    predictions = [
+                        [pred for pred, m in zip(pred_seq, mask_seq) if m]
+                        for pred_seq, mask_seq in zip(predictions, mask.cpu().tolist())
+                    ]
+
+                result["predictions"] = predictions
         del logits
         return result
 
@@ -835,37 +836,13 @@ def train_lodo(
                 f"Split sizes: {len(train_data)} - {len(test_data)} // {len(train_data)/total_size:.1%} - {len(test_data)/total_size:.1%}"
             )
 
-        batch_sampler = None
-        if hparams["debate_alpha"] < 1 or hparams["bio_alpha"] > 0:
-            # Debate-level weighted sampling setup
-            debate_to_indices = compute_debate_to_indices(train_data)
-            debate_weights = compute_debate_weights(
-                remaining_debates, debate_to_indices, hparams["debate_alpha"]
-            )
-            # Compute debate-level BIO scores for tempered sampling
-            debate_to_bio_scores = compute_debate_to_bio_scores(train_data, tokenizer)
-
-            batch_sampler = TemperedBatchSampler(
-                debate_to_indices=debate_to_indices,
-                debate_to_bio_scores=debate_to_bio_scores,
-                debates=remaining_debates,
-                debate_weights=debate_weights,
-                batch_size=hparams["batch_size"],
-                num_batches=ceil(len(train_data) / hparams["batch_size"]),
-                bio_alpha=hparams["bio_alpha"],
-                bio_eps=hparams["bio_eps"],
-                debate_alpha=hparams["debate_alpha"],
-                shuffle=False,
-            )
-
         # Prepare datasets and dataloaders
         train_dataset = WTCLDataset(
             train_data.to_dict("records"), tokenizer, MAX_LENGTH
         )
         train_loader = DataLoader(
             train_dataset,
-            batch_sampler=batch_sampler,
-            batch_size=1 if batch_sampler is not None else hparams["batch_size"],
+            batch_size=hparams["batch_size"],
         )
 
         if val:
@@ -1248,24 +1225,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.01,
         help="Weight decay for the optimizer.",
-    )
-    parser.add_argument(
-        "--debate-alpha",
-        type=float,
-        default=DEBATE_TEMPERED_SAMPLING_ALPHA,
-        help="Tempered sampling alpha for debate sampling.",
-    )
-    parser.add_argument(
-        "--bio-alpha",
-        type=float,
-        default=BIO_TEMPERED_SAMPLING_ALPHA,
-        help="Tempered sampling alpha for BIO score sampling.",
-    )
-    parser.add_argument(
-        "--bio-eps",
-        type=float,
-        default=BIO_TEMPERED_SAMPLING_EPS,
-        help="Small epsilon to avoid zero probabilities in BIO score sampling.",
     )
     parser.add_argument(
         "--freeze",

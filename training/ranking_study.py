@@ -2,7 +2,12 @@ from argparse import ArgumentParser
 import json
 from pathlib import Path
 
-from ranking import create_val_table, create_test_table, fill_val_table, fill_test_table
+from ranking_model import (
+    create_val_table,
+    create_test_table,
+    fill_val_table,
+    fill_test_table,
+)
 from utils import console
 from rich.table import Table
 
