@@ -141,7 +141,7 @@ def main():
 
     # Cohen's Kappa
     kappa = cohen_kappa_score(labels_A_flat, labels_B_flat)
-    console.print(f"Cohen's Kappa: {kappa}")
+    console.print(f"Cohen's Kappa: {kappa:.2%}")
 
     # Token-level metrics
     token_level_metrics = classification_report(
@@ -150,22 +150,35 @@ def main():
         labels=list(range(len(label_list))),
         output_dict=True,
     )
-    console.print(f"Macro metrics: {token_level_metrics['macro avg']}")
+    console.print(
+        f"Macro metrics: "
+        f"F1 = {token_level_metrics['macro avg']['f1-score']:.2%}, "
+        f"Precision = {token_level_metrics['macro avg']['precision']:.2%}, "
+        f"Recall = {token_level_metrics['macro avg']['recall']:.2%}"
+    )
 
     for id in range(len(label_list)):
         console.print(
-            f"Metrics for class {label_list[id]}: {token_level_metrics[str(id)]}"
+            f"Metrics for class {label_list[id]}: "
+            f"F1 = {token_level_metrics[str(id)]['f1-score']:.2%}, "
+            f"Precision = {token_level_metrics[str(id)]['precision']:.2%}, "
+            f"Recall = {token_level_metrics[str(id)]['recall']:.2%}"
         )
 
     # Exact Span F1
     exact_span = compute_metrics_span_level(labels_A, labels_B)
-    console.print(f"Exact Span metrics: {exact_span}")
+    console.print(
+        f"Exact Span metrics: "
+        f"F1 = {exact_span['f1']:.2%}, "
+        f"Precision = {exact_span['precision']:.2%}, "
+        f"Recall = {exact_span['recall']:.2%}"
+    )
 
     # Partial Span F1 for different IoU thresholds
     for t in (0.25, 0.5, 0.75):
         m = partial_span_f1(df_A, df_B, threshold=t)
         console.print(
-            f"IoU ≥ {t:.2f}: F1 = {m['f1']:.5f} P={m['precision']:.5f} R={m['recall']:.5f}"
+            f"IoU ≥ {t:.2f}: F1 = {float(m['f1']):.2%} P={float(m['precision']):.2%} R={(float(m['recall'])):.2%}"
         )
 
 

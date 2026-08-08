@@ -149,8 +149,8 @@ def load_model_as_first_trial(study: optuna.Study, model_path: str) -> None:
 
 
 # Hyperparameter sampling function
-def sample_hparams(trial: optuna.Trial) -> dict:
-    return {
+def sample_hparams(trial: optuna.Trial, crf: bool) -> dict:
+    hparams = {
         "lr": trial.suggest_float("lr", *LR_RANGE, log=True),
         "weight_decay": trial.suggest_categorical("weight_decay", WEIGHT_DECAY_OPTIONS),
         "warmup_ratio": trial.suggest_float("warmup_ratio", *WARMUP_RATIO_RANGE),
@@ -160,12 +160,16 @@ def sample_hparams(trial: optuna.Trial) -> dict:
             *LR_FC_MULT_RANGE,
             log=True,
         ),
-        "lr_crf_mult": trial.suggest_float(
+    }
+
+    if crf:
+        hparams["lr_crf_mult"] = trial.suggest_float(
             "lr_crf_mult",
             *LR_CRF_MULT_RANGE,
             log=True,
-        ),
-    }
+        )
+
+    return hparams
 
 
 def save_study_results(study, outdir):
@@ -221,7 +225,7 @@ def objective(
     model_name: str,
     fixed_hparams: dict,
 ) -> float:
-    hparams = sample_hparams(trial)
+    hparams = sample_hparams(trial, crf=fixed_hparams.get("use_crf", True))
     hparams = hparams | fixed_hparams  # Merge sampled hyperparameters with fixed ones
 
     console.rule(f"Trial {trial.number}", style="bold cyan")
@@ -297,9 +301,8 @@ def parse_args() -> argparse.Namespace:
         "--batch-size", type=int, required=True, help="Batch size for training"
     )
     parser.add_argument(
-        "--use-crf",
-        type=bool,
-        default=True,
+        "--no-crf",
+        action="store_true",
         help="Whether to use a CRF layer on top of the transformer model.",
     )
     parser.add_argument(
@@ -360,11 +363,10 @@ def main():
     args = parse_args()
     set_random_seed(args.seed)
     study_name = f"study_{args.input_file.split('/')[-1].split('.')[0].split('_')[0]}_{args.model_name.split('/')[-1]}_{datetime_now}"
-
     fixed_hparams = {
         "num_epochs": args.num_epochs,
         "batch_size": args.batch_size,
-        "use_crf": True,
+        "use_crf": not args.no_crf,
         "debate_alpha": DEBATE_TEMPERED_SAMPLING_ALPHA,
         "bio_alpha": BIO_TEMPERED_SAMPLING_ALPHA,
         "bio_eps": BIO_TEMPERED_SAMPLING_EPS,
