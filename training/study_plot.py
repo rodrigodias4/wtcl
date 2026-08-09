@@ -68,7 +68,7 @@ def plot_result_per_trial(study_results, outdir):
         where="post",
         color="blue",
         alpha=0.2,
-        linestyle="--",
+        linestyle=(0, (4, 4)),
         linewidth=0.9,
         label="Running Max Objective Value",
         zorder=1,
@@ -94,18 +94,22 @@ def plot_result_per_trial(study_results, outdir):
     # Shade startup trials region
     n_startup_trials = study_results.get("pruner", {}).get("n_startup_trials", 0)
     if n_startup_trials > 0:
-        plt.axvspan(
-            0,
-            n_startup_trials - 1,
-            facecolor="lightgray",
-            edgecolor="none",
-            alpha=0.5,
-            label="Startup Trials",
-            zorder=0,
+        plt.plot(
+            [0, n_startup_trials - 1],
+            [0.2, 0.2],
+            color="cornflowerblue",
+            markersize=0,
+        )
+        plt.plot([0, 0], [0.19, 0.21], color="cornflowerblue", markersize=0)
+        plt.plot(
+            [n_startup_trials - 1, n_startup_trials - 1],
+            [0.19, 0.21],
+            color="cornflowerblue",
+            markersize=0,
         )
         plt.text(
             (n_startup_trials - 1) / 2,
-            0.05,
+            0.17,
             "Startup Trials",
             horizontalalignment="center",
             verticalalignment="center",
@@ -113,14 +117,31 @@ def plot_result_per_trial(study_results, outdir):
             color="black",
         )
 
+    # Shade random trials region
+    plt.plot(
+        [0, 9],
+        [0.1, 0.1],
+        color="violet",
+        markersize=0,
+    )
+    plt.plot([0, 0], [0.09, 0.11], color="violet", markersize=0)
+    plt.plot([9, 9], [0.09, 0.11], color="violet", markersize=0)
+    plt.text(
+        4.5,
+        0.07,
+        "Random Trials",
+        horizontalalignment="center",
+        verticalalignment="center",
+        fontsize=8,
+        color="black",
+    )
+
     plt.ylim(0, 1)
     plt.yticks(np.arange(0, 1.1, 0.1))
     # plt.title("Study Results per Trial")
     plt.xlabel("Trial Number")
-    plt.xticks(
-        np.arange(
-            0, len(trial_numbers) + 1, step=max(2, (len(trial_numbers) // 16) * 2)
-        )
+    plt.gca().xaxis.set_major_locator(
+        plt.MaxNLocator(integer=True, nbins=24, steps=[1, 2, 5, 10], prune=None)
     )
     plt.ylabel("Macro F1")
     plt.grid(True, alpha=0.2)
