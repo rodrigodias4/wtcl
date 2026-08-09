@@ -1,0 +1,170 @@
+reason_choice,speaker,count,total_count
+economy,OBAMA,91,417
+economy,TRUMP,80,417
+economy,ROMNEY,74,417
+economy,GORE,46,417
+economy,BUSH,33,417
+economy,CLINTON,33,417
+economy,BIDEN,28,417
+economy,HARRIS,16,417
+economy,MCCAIN,14,417
+economy,KERRY,2,417
+domestic politics,TRUMP,89,270
+domestic politics,BUSH,32,270
+domestic politics,HARRIS,27,270
+domestic politics,GORE,23,270
+domestic politics,OBAMA,22,270
+domestic politics,BIDEN,20,270
+domestic politics,ROMNEY,19,270
+domestic politics,KERRY,17,270
+domestic politics,MCCAIN,15,270
+domestic politics,CLINTON,6,270
+health/medicine,OBAMA,44,213
+health/medicine,TRUMP,43,213
+health/medicine,BIDEN,42,213
+health/medicine,ROMNEY,34,213
+health/medicine,GORE,24,213
+health/medicine,HARRIS,15,213
+health/medicine,BUSH,9,213
+health/medicine,MCCAIN,2,213
+international relations,TRUMP,50,198
+international relations,BUSH,39,198
+international relations,KERRY,32,198
+international relations,MCCAIN,25,198
+international relations,HARRIS,16,198
+international relations,OBAMA,14,198
+international relations,CLINTON,13,198
+international relations,GORE,4,198
+international relations,BIDEN,3,198
+international relations,ROMNEY,2,198
+war/conflict,KERRY,44,172
+war/conflict,MCCAIN,35,172
+war/conflict,OBAMA,27,172
+war/conflict,TRUMP,22,172
+war/conflict,BUSH,16,172
+war/conflict,GORE,9,172
+war/conflict,HARRIS,9,172
+war/conflict,CLINTON,6,172
+war/conflict,BIDEN,4,172
+defense/military,KERRY,26,111
+defense/military,OBAMA,18,111
+defense/military,TRUMP,17,111
+defense/military,BUSH,16,111
+defense/military,MCCAIN,11,111
+defense/military,GORE,9,111
+defense/military,HARRIS,6,111
+defense/military,BIDEN,4,111
+defense/military,ROMNEY,3,111
+defense/military,CLINTON,1,111
+justice,TRUMP,40,98
+justice,BUSH,21,98
+justice,HARRIS,12,98
+justice,CLINTON,8,98
+justice,BIDEN,4,98
+justice,MCCAIN,4,98
+justice,GORE,3,98
+justice,KERRY,3,98
+justice,OBAMA,2,98
+justice,ROMNEY,1,98
+energy,TRUMP,14,80
+energy,OBAMA,13,80
+energy,BUSH,12,80
+energy,MCCAIN,11,80
+energy,GORE,9,80
+energy,ROMNEY,8,80
+energy,HARRIS,7,80
+energy,BIDEN,2,80
+energy,CLINTON,2,80
+energy,KERRY,2,80
+crime,TRUMP,41,68
+crime,HARRIS,10,68
+crime,CLINTON,6,68
+crime,BIDEN,5,68
+crime,KERRY,2,68
+crime,MCCAIN,2,68
+crime,GORE,1,68
+crime,OBAMA,1,68
+personal life,TRUMP,37,68
+personal life,CLINTON,18,68
+personal life,HARRIS,5,68
+personal life,BIDEN,3,68
+personal life,KERRY,3,68
+personal life,BUSH,1,68
+personal life,GORE,1,68
+nuclear armament,KERRY,28,65
+nuclear armament,BUSH,15,65
+nuclear armament,OBAMA,12,65
+nuclear armament,CLINTON,4,65
+nuclear armament,MCCAIN,2,65
+nuclear armament,TRUMP,2,65
+nuclear armament,BIDEN,1,65
+nuclear armament,GORE,1,65
+terrorism,KERRY,12,61
+terrorism,OBAMA,12,61
+terrorism,TRUMP,12,61
+terrorism,BUSH,9,61
+terrorism,HARRIS,7,61
+terrorism,MCCAIN,5,61
+terrorism,CLINTON,4,61
+environment,BIDEN,15,51
+environment,TRUMP,10,51
+environment,MCCAIN,5,51
+environment,GORE,4,51
+environment,HARRIS,4,51
+environment,BUSH,3,51
+environment,CLINTON,3,51
+environment,OBAMA,3,51
+environment,ROMNEY,3,51
+environment,KERRY,1,51
+education,GORE,16,50
+education,OBAMA,10,50
+education,TRUMP,10,50
+education,ROMNEY,7,50
+education,BIDEN,4,50
+education,BUSH,3,50
+ethnicity/race,CLINTON,9,33
+ethnicity/race,TRUMP,9,33
+ethnicity/race,HARRIS,5,33
+ethnicity/race,BIDEN,4,33
+ethnicity/race,GORE,2,33
+ethnicity/race,KERRY,2,33
+ethnicity/race,BUSH,1,33
+ethnicity/race,MCCAIN,1,33
+immigration,TRUMP,24,29
+immigration,HARRIS,3,29
+immigration,BUSH,2,29
+abortion,HARRIS,10,26
+abortion,TRUMP,7,26
+abortion,BUSH,4,26
+abortion,GORE,4,26
+abortion,BIDEN,1,26
+housing,OBAMA,7,18
+housing,HARRIS,5,18
+housing,CLINTON,3,18
+housing,ROMNEY,2,18
+housing,GORE,1,18
+automobiles,TRUMP,10,13
+automobiles,BIDEN,2,13
+automobiles,GORE,1,13
+firearms / gun control,TRUMP,5,11
+firearms / gun control,CLINTON,4,11
+firearms / gun control,HARRIS,2,11
+technology,CLINTON,5,11
+technology,TRUMP,5,11
+technology,HARRIS,1,11
+gender equality,CLINTON,4,7
+gender equality,BIDEN,2,7
+gender equality,BUSH,1,7
+science/research,KERRY,2,6
+science/research,BIDEN,1,6
+science/research,BUSH,1,6
+science/research,MCCAIN,1,6
+science/research,OBAMA,1,6
+religion,BIDEN,2,5
+religion,KERRY,2,5
+religion,BUSH,1,5
+narcotics,KERRY,2,3
+narcotics,OBAMA,1,3
+LGBTQ+,OBAMA,1,2
+LGBTQ+,TRUMP,1,2
+euthanasia,BUSH,1,1

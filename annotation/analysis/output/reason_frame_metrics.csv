@@ -1,0 +1,58 @@
+reason_choice,speaker,count,total_count
+behavioral attribution,TRUMP,149,577
+behavioral attribution,OBAMA,73,577
+behavioral attribution,KERRY,67,577
+behavioral attribution,BUSH,65,577
+behavioral attribution,MCCAIN,58,577
+behavioral attribution,HARRIS,39,577
+behavioral attribution,GORE,38,577
+behavioral attribution,BIDEN,35,577
+behavioral attribution,CLINTON,29,577
+behavioral attribution,ROMNEY,24,577
+stance,TRUMP,99,417
+stance,GORE,63,417
+stance,OBAMA,57,417
+stance,BUSH,56,417
+stance,MCCAIN,41,417
+stance,ROMNEY,34,417
+stance,BIDEN,25,417
+stance,CLINTON,17,417
+stance,HARRIS,15,417
+stance,KERRY,10,417
+speech attribution,OBAMA,43,240
+speech attribution,TRUMP,34,240
+speech attribution,KERRY,26,240
+speech attribution,BUSH,25,240
+speech attribution,MCCAIN,25,240
+speech attribution,HARRIS,24,240
+speech attribution,BIDEN,23,240
+speech attribution,ROMNEY,20,240
+speech attribution,CLINTON,11,240
+speech attribution,GORE,9,240
+conspiracy,TRUMP,30,49
+conspiracy,ROMNEY,5,49
+conspiracy,BIDEN,3,49
+conspiracy,GORE,3,49
+conspiracy,HARRIS,3,49
+conspiracy,OBAMA,2,49
+conspiracy,BUSH,1,49
+conspiracy,CLINTON,1,49
+conspiracy,KERRY,1,49
+epistemic,TRUMP,14,39
+epistemic,BIDEN,9,39
+epistemic,OBAMA,5,39
+epistemic,KERRY,3,39
+epistemic,CLINTON,2,39
+epistemic,GORE,2,39
+epistemic,ROMNEY,2,39
+epistemic,BUSH,1,39
+epistemic,MCCAIN,1,39
+anecdote,GORE,5,22
+anecdote,TRUMP,5,22
+anecdote,BUSH,3,22
+anecdote,CLINTON,2,22
+anecdote,HARRIS,2,22
+anecdote,OBAMA,2,22
+anecdote,KERRY,1,22
+anecdote,MCCAIN,1,22
+anecdote,ROMNEY,1,22

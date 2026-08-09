@@ -1,0 +1,100 @@
+reason_choice,speaker,count,total_count
+non-quantitative fact,TRUMP,360,1289
+non-quantitative fact,OBAMA,159,1289
+non-quantitative fact,BUSH,139,1289
+non-quantitative fact,KERRY,116,1289
+non-quantitative fact,BIDEN,106,1289
+non-quantitative fact,HARRIS,98,1289
+non-quantitative fact,MCCAIN,97,1289
+non-quantitative fact,GORE,82,1289
+non-quantitative fact,CLINTON,69,1289
+non-quantitative fact,ROMNEY,63,1289
+quantitative precise,TRUMP,89,387
+quantitative precise,ROMNEY,67,387
+quantitative precise,OBAMA,55,387
+quantitative precise,BUSH,44,387
+quantitative precise,GORE,33,387
+quantitative precise,BIDEN,25,387
+quantitative precise,KERRY,21,387
+quantitative precise,MCCAIN,19,387
+quantitative precise,HARRIS,18,387
+quantitative precise,CLINTON,16,387
+temporal reference,TRUMP,32,165
+temporal reference,OBAMA,31,165
+temporal reference,BUSH,25,165
+temporal reference,GORE,18,165
+temporal reference,BIDEN,14,165
+temporal reference,ROMNEY,12,165
+temporal reference,MCCAIN,11,165
+temporal reference,CLINTON,9,165
+temporal reference,KERRY,8,165
+temporal reference,HARRIS,5,165
+quantitative approximate,TRUMP,48,119
+quantitative approximate,OBAMA,17,119
+quantitative approximate,GORE,11,119
+quantitative approximate,BIDEN,10,119
+quantitative approximate,KERRY,10,119
+quantitative approximate,ROMNEY,8,119
+quantitative approximate,MCCAIN,5,119
+quantitative approximate,CLINTON,4,119
+quantitative approximate,HARRIS,4,119
+quantitative approximate,BUSH,2,119
+forecast,BUSH,17,102
+forecast,OBAMA,16,102
+forecast,ROMNEY,16,102
+forecast,TRUMP,12,102
+forecast,BIDEN,11,102
+forecast,CLINTON,10,102
+forecast,GORE,10,102
+forecast,MCCAIN,4,102
+forecast,HARRIS,3,102
+forecast,KERRY,3,102
+trend/change,TRUMP,21,84
+trend/change,OBAMA,18,84
+trend/change,BIDEN,12,84
+trend/change,ROMNEY,11,84
+trend/change,CLINTON,8,84
+trend/change,BUSH,4,84
+trend/change,GORE,4,84
+trend/change,HARRIS,2,84
+trend/change,KERRY,2,84
+trend/change,MCCAIN,2,84
+quantitative vague,TRUMP,41,83
+quantitative vague,OBAMA,8,83
+quantitative vague,BUSH,7,83
+quantitative vague,MCCAIN,7,83
+quantitative vague,ROMNEY,5,83
+quantitative vague,BIDEN,4,83
+quantitative vague,CLINTON,4,83
+quantitative vague,GORE,4,83
+quantitative vague,HARRIS,2,83
+quantitative vague,KERRY,1,83
+ranking,TRUMP,27,81
+ranking,OBAMA,17,81
+ranking,MCCAIN,8,81
+ranking,GORE,6,81
+ranking,HARRIS,6,81
+ranking,CLINTON,4,81
+ranking,KERRY,4,81
+ranking,ROMNEY,4,81
+ranking,BUSH,3,81
+ranking,BIDEN,2,81
+comparison,OBAMA,12,58
+comparison,TRUMP,11,58
+comparison,BIDEN,8,58
+comparison,BUSH,6,58
+comparison,KERRY,6,58
+comparison,GORE,5,58
+comparison,ROMNEY,5,58
+comparison,CLINTON,3,58
+comparison,MCCAIN,2,58
+causation,OBAMA,17,53
+causation,TRUMP,8,53
+causation,BIDEN,6,53
+causation,MCCAIN,6,53
+causation,ROMNEY,4,53
+causation,BUSH,3,53
+causation,CLINTON,3,53
+causation,GORE,3,53
+causation,KERRY,2,53
+causation,HARRIS,1,53

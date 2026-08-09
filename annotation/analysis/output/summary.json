@@ -1,0 +1,200 @@
+{
+  "turn_count": 1367,
+  "claim_count": 2028,
+  "speaker_count": 10,
+  "turns_with_claims": 596,
+  "turn_length_chars": {
+    "count": 1367,
+    "mean": 403.83394294074617,
+    "median": 80.0,
+    "std": 597.0144933506225,
+    "min": 3.0,
+    "p25": 29.0,
+    "p75": 518.5,
+    "max": 2753.0
+  },
+  "turn_length_words": {
+    "count": 1367,
+    "mean": 74.15874177029993,
+    "median": 15.0,
+    "std": 108.67732603727839,
+    "min": 1.0,
+    "p25": 6.0,
+    "p75": 98.0,
+    "max": 497.0
+  },
+  "claims_per_turn": {
+    "count": 1367,
+    "mean": 1.4835405998536941,
+    "median": 0.0,
+    "std": 2.499945817042206,
+    "min": 0.0,
+    "p25": 0.0,
+    "p75": 2.0,
+    "max": 14.0
+  },
+  "claim_span_chars": {
+    "count": 2028,
+    "mean": 65.90532544378698,
+    "median": 57.5,
+    "std": 40.63798311723759,
+    "min": 6.0,
+    "p25": 37.0,
+    "p75": 83.0,
+    "max": 443.0
+  },
+  "claim_span_words": {
+    "count": 2028,
+    "mean": 11.843688362919131,
+    "median": 10.0,
+    "std": 7.095552723168296,
+    "min": 2.0,
+    "p25": 7.0,
+    "p75": 15.0,
+    "max": 77.0
+  },
+  "claim_rel_start": {
+    "count": 2028,
+    "mean": 0.44228115164906034,
+    "median": 0.4297433530842508,
+    "std": 0.2800730346769229,
+    "min": 0.0,
+    "p25": 0.19795054945054946,
+    "p75": 0.6812525059349799,
+    "max": 0.9931673987310884
+  },
+  "claim_rel_len": {
+    "count": 2028,
+    "mean": 0.11558759970809031,
+    "median": 0.05190056387211266,
+    "std": 0.1804719128040566,
+    "min": 0.0025412960609911056,
+    "p25": 0.030401547637847883,
+    "p75": 0.10329232654600301,
+    "max": 0.996031746031746
+  },
+  "reason_form_count": 2421,
+  "reason_frame_count": 1344,
+  "reason_domain_count": 2087,
+  "reason_form_totals": {
+    "non-quantitative fact": 1289,
+    "quantitative precise": 387,
+    "temporal reference": 165,
+    "quantitative approximate": 119,
+    "forecast": 102,
+    "trend/change": 84,
+    "quantitative vague": 83,
+    "ranking": 81,
+    "comparison": 58,
+    "causation": 53
+  },
+  "reason_frame_totals": {
+    "behavioral attribution": 577,
+    "stance": 417,
+    "speech attribution": 240,
+    "conspiracy": 49,
+    "epistemic": 39,
+    "anecdote": 22
+  },
+  "reason_domain_totals": {
+    "economy": 417,
+    "domestic politics": 270,
+    "health/medicine": 213,
+    "international relations": 198,
+    "war/conflict": 172,
+    "defense/military": 111,
+    "justice": 98,
+    "energy": 80,
+    "crime": 68,
+    "personal life": 68,
+    "nuclear armament": 65,
+    "terrorism": 61,
+    "environment": 51,
+    "education": 50,
+    "ethnicity/race": 33,
+    "immigration": 29,
+    "abortion": 26,
+    "housing": 18,
+    "automobiles": 13,
+    "firearms / gun control": 11,
+    "technology": 11,
+    "gender equality": 7,
+    "science/research": 6,
+    "religion": 5,
+    "narcotics": 3,
+    "LGBTQ+": 2,
+    "euthanasia": 1
+  },
+  "per_speaker": {
+    "KERRY": {
+      "turn_count": 33,
+      "claim_count": 155,
+      "spans_per_turn": 4.696969696969697,
+      "span_chars_over_turn_chars_pct": 30.48339616794918,
+      "span_words_over_turn_words_pct": 29.77441502031666
+    },
+    "HARRIS": {
+      "turn_count": 35,
+      "claim_count": 125,
+      "spans_per_turn": 3.5714285714285716,
+      "span_chars_over_turn_chars_pct": 30.230654987421573,
+      "span_words_over_turn_words_pct": 29.354075076090634
+    },
+    "GORE": {
+      "turn_count": 49,
+      "claim_count": 140,
+      "spans_per_turn": 2.857142857142857,
+      "span_chars_over_turn_chars_pct": 28.77570164541237,
+      "span_words_over_turn_words_pct": 28.55953372189842
+    },
+    "OBAMA": {
+      "turn_count": 119,
+      "claim_count": 274,
+      "spans_per_turn": 2.302521008403361,
+      "span_chars_over_turn_chars_pct": 25.391354647449415,
+      "span_words_over_turn_words_pct": 24.752211800705116
+    },
+    "MCCAIN": {
+      "turn_count": 63,
+      "claim_count": 141,
+      "spans_per_turn": 2.238095238095238,
+      "span_chars_over_turn_chars_pct": 25.346096831737896,
+      "span_words_over_turn_words_pct": 24.280750521195273
+    },
+    "BUSH": {
+      "turn_count": 97,
+      "claim_count": 207,
+      "spans_per_turn": 2.134020618556701,
+      "span_chars_over_turn_chars_pct": 17.8781951485636,
+      "span_words_over_turn_words_pct": 17.17288872779993
+    },
+    "ROMNEY": {
+      "turn_count": 71,
+      "claim_count": 151,
+      "spans_per_turn": 2.1267605633802815,
+      "span_chars_over_turn_chars_pct": 23.917841957294545,
+      "span_words_over_turn_words_pct": 23.759493670886076
+    },
+    "CLINTON": {
+      "turn_count": 87,
+      "claim_count": 100,
+      "spans_per_turn": 1.1494252873563218,
+      "span_chars_over_turn_chars_pct": 20.62916954221302,
+      "span_words_over_turn_words_pct": 20.41364066940322
+    },
+    "TRUMP": {
+      "turn_count": 544,
+      "claim_count": 572,
+      "spans_per_turn": 1.0514705882352942,
+      "span_chars_over_turn_chars_pct": 21.94769016482241,
+      "span_words_over_turn_words_pct": 21.677623366896896
+    },
+    "BIDEN": {
+      "turn_count": 269,
+      "claim_count": 163,
+      "spans_per_turn": 0.6059479553903345,
+      "span_chars_over_turn_chars_pct": 28.140059611688347,
+      "span_words_over_turn_words_pct": 27.581661051706458
+    }
+  }
+}
