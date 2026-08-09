@@ -31,15 +31,28 @@ def plot_result_per_trial(study_results, outdir):
             if trial_results.get("pruned") is None or trial_results["pruned"] is False
             else trial_results["completed_folds"]
         )
-    max_objective_value_at_trial = [
-        max(objective_values[: i + 1]) for i in range(len(objective_values))
-    ]
+    max_objective_value_at_trial = []
+    best_trial_numbers = []
+    best_objective_values = []
+    running_max = float("-inf")
+    for trial_number, objective_value in zip(trial_numbers, objective_values):
+        if (
+            num_completed_folds[trial_numbers.index(trial_number)] == 7
+            and objective_value > running_max
+        ):
+            best_trial_numbers.append(trial_number)
+            best_objective_values.append(objective_value)
+            running_max = objective_value
+        else:
+            running_max = max(running_max, objective_value)
+        max_objective_value_at_trial.append(running_max)
 
     # Create a scatter plot of the results
     plt.figure(figsize=(10, 6))
     scatter = plt.scatter(
         trial_numbers,
         objective_values,
+        s=30,
         c=num_completed_folds,
         cmap=cmaps.bubblegum.reversed(),
         vmin=study_results.get("pruner", {}).get("n_warmup_steps", 0) + 1,
@@ -53,12 +66,25 @@ def plot_result_per_trial(study_results, outdir):
         trial_numbers,
         max_objective_value_at_trial,
         where="post",
-        color="red",
+        color="blue",
         alpha=0.2,
         linestyle="--",
+        linewidth=0.9,
         label="Running Max Objective Value",
         zorder=1,
     )
+
+    best_trials = None
+    if best_trial_numbers:
+        best_trials = plt.scatter(
+            best_trial_numbers,
+            best_objective_values,
+            marker="D",
+            s=40,
+            facecolors=cmaps.bubblegum.reversed()(1.0),
+            label="New Best Trial",
+            zorder=4,
+        )
 
     # Add the colorbar corresponding to the scatter plot colors
     cbar = plt.colorbar(scatter)
@@ -71,14 +97,15 @@ def plot_result_per_trial(study_results, outdir):
         plt.axvspan(
             0,
             n_startup_trials - 1,
-            color="lightgray",
+            facecolor="lightgray",
+            edgecolor="none",
             alpha=0.5,
             label="Startup Trials",
             zorder=0,
         )
         plt.text(
             (n_startup_trials - 1) / 2,
-            0.95,
+            0.05,
             "Startup Trials",
             horizontalalignment="center",
             verticalalignment="center",
@@ -90,10 +117,17 @@ def plot_result_per_trial(study_results, outdir):
     plt.yticks(np.arange(0, 1.1, 0.1))
     # plt.title("Study Results per Trial")
     plt.xlabel("Trial Number")
-    plt.xticks(np.arange(0, len(trial_numbers), step=max(1, len(trial_numbers) // 20)))
+    plt.xticks(
+        np.arange(
+            0, len(trial_numbers) + 1, step=max(2, (len(trial_numbers) // 16) * 2)
+        )
+    )
     plt.ylabel("Macro F1")
-    plt.grid(True, alpha=0.3)
-    plt.legend(handles=[max_at_trial[0]])
+    plt.grid(True, alpha=0.2)
+    legend_handles = [max_at_trial[0]]
+    if best_trials is not None:
+        legend_handles.append(best_trials)
+    plt.legend(handles=legend_handles, loc="lower right")
 
     # Save the plot to the output directory
     plot_path = outdir / "objective_value_per_trial.png"
