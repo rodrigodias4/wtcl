@@ -185,7 +185,11 @@ def plot_result_per_hparam(study_results, outdir):
             cmap=cmaps.bubblegum.reversed(),
             vmin=study_results.get("pruner", {}).get("n_warmup_steps", 0) + 1,
             vmax=7,
+            s=64,
+            edgecolor="white",
+            linewidth=0.5,
             label="Objective Value",
+            zorder=2,
         )
 
         # Add the colorbar corresponding to the scatter plot colors
@@ -210,7 +214,7 @@ def plot_result_per_hparam(study_results, outdir):
         # plt.title(f"Study Results per Hyperparameter: {hparam}")
         plt.xlabel(f"{hparam.replace('_', ' ').capitalize()} Value")
         plt.ylabel("Macro F1")
-        plt.grid(True, alpha=0.3)
+        plt.grid(True, alpha=0.3, zorder=0)
 
         # Save the plot to the output directory
         plot_path = outdir / f"objective_value_per_{hparam}.png"

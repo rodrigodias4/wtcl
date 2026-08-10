@@ -18,12 +18,8 @@ from train import (
     print_overall_results,
     set_random_seed,
     train_lodo,
-    script_dir,
 )
 from utils import (
-    BIO_TEMPERED_SAMPLING_ALPHA,
-    BIO_TEMPERED_SAMPLING_EPS,
-    DEBATE_TEMPERED_SAMPLING_ALPHA,
     MODEL_DEFAULT,
     handle_interrupt,
     console,
@@ -367,9 +363,6 @@ def main():
         "num_epochs": args.num_epochs,
         "batch_size": args.batch_size,
         "use_crf": not args.no_crf,
-        "debate_alpha": DEBATE_TEMPERED_SAMPLING_ALPHA,
-        "bio_alpha": BIO_TEMPERED_SAMPLING_ALPHA,
-        "bio_eps": BIO_TEMPERED_SAMPLING_EPS,
         "crf_priors": False,
         "emission_bias": False,
         "freeze": 0,
