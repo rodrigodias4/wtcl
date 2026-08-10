@@ -46,6 +46,7 @@ def plot_validation_metric_curve_single(
             mec="white",
             linestyle="-",
             label="$M_{%s}$" % model_name[0:4],
+            zorder=2,
         )
 
     results_at_epoch = [[] for _ in range(max_epochs)]
@@ -79,6 +80,7 @@ def plot_validation_metric_curve_single(
         color="gray",
         alpha=0.3,
         label="Mean ± Std Dev",
+        zorder=0,
     )
 
     # Plot mean line
@@ -88,6 +90,7 @@ def plot_validation_metric_curve_single(
         color="black",
         linestyle="--",
         label="Mean",
+        zorder=2,
     )
 
     # Plot the last point of the mean with a marker and annotation
@@ -97,6 +100,7 @@ def plot_validation_metric_curve_single(
         marker="o",
         color="black",
         mec="white",
+        zorder=3,
     )
     plt.annotate(
         f"{mean[-1]:.3f}",
@@ -119,7 +123,7 @@ def plot_validation_metric_curve_single(
     plt.ylabel(f"{label.capitalize()} {metric.capitalize()}")
     plt.yticks([i / 10 for i in range(11)])
     plt.ylim(0, 1)
-    plt.grid(True, alpha=0.3)
+    plt.grid(True, alpha=0.3, zorder=0)
     # plt.title(f"Validation {label.capitalize()}-{metric.capitalize()} per Epoch")
 
     plt.tight_layout()
@@ -160,8 +164,10 @@ def plot_train_val_loss_curves(results, output_path: Path):
             color=train_color,
             marker=marker,
             mec="white",
+            mew=0.7,
+            ms=7,
             linestyle="-",
-            alpha=0.8,
+            zorder=2,
         )
 
         # Validation
@@ -171,25 +177,42 @@ def plot_train_val_loss_curves(results, output_path: Path):
             color=val_color,
             marker=marker,
             mec="white",
-            linestyle="--",
-            alpha=0.8,
+            mew=0.7,
+            ms=7,
+            linestyle="-",
+            zorder=2,
         )
 
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.xticks([i for i in range(1, max_epochs + 1)])
-    plt.grid(alpha=0.3)
+    plt.grid(True, alpha=0.3, zorder=0)
     # plt.title("Training and Validation Loss Curves")
-    plt.grid(True)
 
     train_line = mlines.Line2D(
-        [], [], color=train_color, linestyle="-", label="Train Loss"
+        [], [], color=train_color, linestyle="-", label="Training"
     )
     val_line = mlines.Line2D(
-        [], [], color=val_color, linestyle="--", label="Validation Loss"
+        [], [], color=val_color, linestyle="--", label="Validation"
     )
+    marker_lines = [
+        mlines.Line2D(
+            [],
+            [],
+            color="black",
+            marker=PLOT_MARKERS[i % len(PLOT_MARKERS)],
+            linestyle="None",
+            label="$M_{%s}$" % k[0:4],
+        )
+        for i, k in enumerate(results.keys())
+        if k != "overall"
+    ]
 
-    plt.legend(handles=[train_line, val_line])
+    plt.legend(
+        handles=[train_line, val_line] + marker_lines,
+        loc="upper left",
+        bbox_to_anchor=(1, 1),
+    )
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
 
@@ -210,7 +233,7 @@ def plot_train_loss_curve(results, output_path: Path):
             color=plt.get_cmap("plasma")(i / (len(results) - 1)),
             mec="white",
             linestyle="-",
-            alpha=0.8,
+            zorder=2,
         )
 
     plt.legend(
@@ -221,7 +244,7 @@ def plot_train_loss_curve(results, output_path: Path):
     # plt.title("Training Loss Curve")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.grid(alpha=0.3)
+    plt.grid(True, alpha=0.3, zorder=0)
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)

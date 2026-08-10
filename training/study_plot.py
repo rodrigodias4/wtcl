@@ -144,7 +144,7 @@ def plot_result_per_trial(study_results, outdir):
         plt.MaxNLocator(integer=True, nbins=24, steps=[1, 2, 5, 10], prune=None)
     )
     plt.ylabel("Macro F1")
-    plt.grid(True, alpha=0.2)
+    plt.grid(True, alpha=0.2, zorder=0)
     legend_handles = [max_at_trial[0]]
     if best_trials is not None:
         legend_handles.append(best_trials)
