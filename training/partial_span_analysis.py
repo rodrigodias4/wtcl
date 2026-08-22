@@ -13,12 +13,9 @@ from utils import console, id2label
 def bio_sequence_to_spans(labels: Sequence) -> list[tuple[int, int]]:
     """
     Convert a BIO sequence into spans over token positions.
-
-    The training artifacts store BIO labels per token, but they do not include
-    character offsets, so we use token-index spans to support IoU-based matching.
     """
-    spans = []
-    start = None
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
 
     for idx, label in enumerate(labels):
         label_type = id2label[label]
@@ -165,6 +162,10 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional IoU thresholds to evaluate. Defaults to 0.1 to 1.0 in 0.1 steps.",
     )
+    parser.add_argument(
+        "--latex",
+        action="store_true",
+    )
     return parser.parse_args()
 
 
@@ -173,10 +174,13 @@ def main() -> None:
 
     input_path = Path(args.preds_labels_file)
     with input_path.open("r") as handle:
-        payload = json.load(handle)
+        preds_labels = json.load(handle)
 
-    preds = payload.get("preds", {})
-    labels = payload.get("labels", {})
+    with (input_path.parent / "results.json").open("r") as handle:
+        results = json.load(handle)
+
+    preds = preds_labels.get("preds", {})
+    labels = preds_labels.get("labels", {})
     if not preds or not labels:
         raise ValueError(
             "The input JSON file must contain non-empty 'preds' and 'labels' objects."
@@ -205,6 +209,13 @@ def main() -> None:
         thresholds = [round(x, 1) for x in np.arange(0.1, 1.0 + 1e-9, 0.1)]
 
     metrics = compute_partial_span_metrics(gold_sequences, pred_sequences, thresholds)
+    metrics_by_debate = {}
+    for debate, debate_preds in preds.items():
+        debate_labels = labels[debate]
+        debate_metrics = compute_partial_span_metrics(
+            debate_labels, debate_preds, thresholds
+        )
+        metrics_by_debate[debate] = debate_metrics
 
     output_dir = (
         Path(args.output_dir) if args.output_dir else input_path.parent / "figures"
@@ -214,13 +225,37 @@ def main() -> None:
     plot_partial_span_metrics(metrics, plot_path)
 
     console.print("Partial span metrics by IoU threshold:")
-    for entry in metrics:
+    if not args.latex:
+        for entry in metrics:
+            console.print(
+                f"IoU ≥ {entry['threshold']:.1f}: "
+                f"F1={entry['f1'] * 100:.1f}  "
+                f"Precision={entry['precision'] * 100:.1f}  "
+                f"Recall={entry['recall'] * 100:.1f}"
+            )
+    else:
+        console.print("Overall partial span metrics:")
+        for entry in metrics:
+            console.print(
+                f"{entry['f1'] * 100:.1f} & {entry['precision'] * 100:.1f} & {entry['recall'] * 100:.1f} & ",
+                end="",
+            )
         console.print(
-            f"IoU ≥ {entry['threshold']:.1f}: "
-            f"F1={entry['f1'] * 100:.2f}  "
-            f"Precision={entry['precision'] * 100:.2f}  "
-            f"Recall={entry['recall'] * 100:.2f}"
+            f"{results['overall']['test']['span']['f1'] * 100:.1f} & {results['overall']['test']['span']['precision'] * 100:.1f} & {results['overall']['test']['span']['recall'] * 100:.1f} "
         )
+
+        console.print("Partial span metrics by debate:")
+
+        for debate, debate_metrics in metrics_by_debate.items():
+            console.print(f"{debate[:4]} & ", end="")
+            for entry in debate_metrics:
+                console.print(
+                    f"{entry['f1'] * 100:.1f} & {entry['precision'] * 100:.1f} & {entry['recall'] * 100:.1f} & ",
+                    end="",
+                )
+            console.print(
+                f"{results[debate]['test_metrics']['span']['f1'] * 100:.1f} & {results[debate]['test_metrics']['span']['precision'] * 100:.1f} & {results[debate]['test_metrics']['span']['recall'] * 100:.1f} \\\\"
+            )
     console.print(f"Saved plot to {plot_path}")
 
 

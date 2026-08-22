@@ -230,3 +230,7 @@ annotation/exports/*.chunked*
 annotation/exports/*.sampled*
 annotation/exports/project-*
 **/temp*
+
+llm/output/
+results_to_latex/
+*.png
