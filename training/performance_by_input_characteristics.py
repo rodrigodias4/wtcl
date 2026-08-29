@@ -4,7 +4,9 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from matplotlib import cm, colors
 import matplotlib.pyplot as plt
+import colormaps as cmaps
 import numpy as np
 import pandas as pd
 from spacy.lang.en import English
@@ -18,7 +20,7 @@ from partial_span_analysis import bio_sequence_to_spans, compute_partial_span_me
 from utils import console, label_list
 
 DEFAULT_LENGTH_BIN_SIZE = 16
-DEFAULT_SENTENCE_BIN_SIZE = 16
+DEFAULT_SENTENCE_BIN_SIZE = 8
 
 
 def bin_label(value: int, bin_size: int) -> str:
@@ -26,7 +28,9 @@ def bin_label(value: int, bin_size: int) -> str:
     return f"{lower}-{lower + bin_size - 1}"
 
 
-def bin_start(value: int, bin_size: int) -> int:
+def bin_start(value: int, bin_size: int, max_threshold: int | None = None) -> int:
+    if max_threshold is not None and value >= max_threshold:
+        return max_threshold
     return (value // bin_size) * bin_size
 
 
@@ -167,7 +171,7 @@ def aggregate_by_sentence_length(
         for sentence_prediction, sentence_label in split_into_sentences(
             text, prediction, label, word_offsets
         ):
-            key = bin_start(len(sentence_label), sentence_bin_size)
+            key = bin_start(len(sentence_label), sentence_bin_size, 64)
             pred_bucket, gold_bucket = grouped.setdefault(key, ([], []))
             pred_bucket.append(sentence_prediction)
             gold_bucket.append(sentence_label)
@@ -252,11 +256,21 @@ def plot_metrics_by_characteristic(
     output_path: Path,
     xlabel: str,
     histogram_mode: bool,
+    figsize: tuple[int, int],
+    max_threshold: int | None = None,
 ) -> None:
+    console.print(metrics)
     groups = sorted(metrics)
     heights = [metrics[group]["f1"] for group in groups]
+    counts = [metrics[group]["count"] for group in groups]
 
-    figure, axis = plt.subplots(figsize=(max(10, len(groups) * 0.4), 4))
+    cmap = cmaps.blue_8_5g2
+    norm = colors.Normalize(
+        vmin=min(counts) if counts else 0, vmax=max(counts) if counts else 1
+    )
+    bar_colors = [cmap(norm(c)) for c in counts]
+
+    figure, axis = plt.subplots(figsize=figsize)
     if histogram_mode:
         bin_size = groups[1] - groups[0] if len(groups) > 1 else 1
         axis.bar(
@@ -264,33 +278,45 @@ def plot_metrics_by_characteristic(
             heights,
             width=bin_size,
             align="edge",
-            color="tab:blue",
+            color=bar_colors,
             edgecolor="black",
             linewidth=0.5,
             zorder=1,
         )
-        xticks = groups + [groups[-1] + bin_size] if groups else []
+        xticks = [str(group) for group in groups]
+        if max_threshold is not None:
+            xticks = [
+                f"{tick}+" if tick >= max_threshold else str(tick) for tick in groups
+            ]
     else:
         axis.bar(
             groups,
             heights,
             width=0.8,
             align="center",
-            color="tab:blue",
+            color=bar_colors,
             edgecolor="black",
             linewidth=0.5,
             zorder=1,
         )
         xticks = groups
-    axis.set_xticks(xticks)
-    axis.set_xlabel(xlabel, fontsize=12)
-    axis.set_ylabel("Macro F1", fontsize=12)
+
+    axis.set_xticks(groups, xticks)
+    axis.set_xlabel(xlabel, fontsize=14)
+    axis.set_ylabel("Macro F1", fontsize=14)
     axis.set_ylim(0, 1)
     axis.set_yticks(np.arange(0, 1.1, 0.1))
     axis.grid(axis="y", alpha=0.3)
-    axis.set_axisbelow(not histogram_mode)
+    axis.set_axisbelow(True)
+    axis.margins(x=0.02)
+
+    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = figure.colorbar(sm, ax=axis, pad=0.02)
+    cbar.set_label("Support (Count)", fontsize=11)
+
     figure.tight_layout()
-    figure.savefig(output_path, dpi=300)
+    figure.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(figure)
 
 
@@ -341,18 +367,22 @@ def main() -> None:
         length_plot_path,
         xlabel="Sequence length",
         histogram_mode=True,
+        figsize=(14, 4),
     )
     plot_metrics_by_characteristic(
         span_metrics,
         span_plot_path,
         xlabel="Span count",
         histogram_mode=False,
+        figsize=(7, 3),
     )
     plot_metrics_by_characteristic(
         sentence_metrics,
         sentence_plot_path,
         xlabel="Sentence length",
         histogram_mode=True,
+        figsize=(7, 3),
+        max_threshold=64,
     )
 
     console.print("Macro F1 by sequence length:")

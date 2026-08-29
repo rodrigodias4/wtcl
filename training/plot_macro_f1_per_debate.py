@@ -8,10 +8,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 MODEL_NAME = {
-    "bert-base-cased": "BERT+CRF",
     "roberta-base": "RoBERTa+CRF",
-    "distilbert-base-cased": "DistilBERT+CRF",
+    "distilroberta-base": "DistilRoBERTa+CRF",
+    "ModernBERT-base": "ModernBERT+CRF",
     "deberta-v3-base": "DeBERTa+CRF",
+    "bert-base-cased": "BERT+CRF",
+    "distilbert-base-cased": "DistilBERT+CRF",
 }
 
 
