@@ -198,6 +198,7 @@ def aggregate_by_span_count(pairs: list[tuple[Sequence, Sequence]]) -> dict[int,
         pred_bucket, gold_bucket = grouped.setdefault(key, ([], []))
         pred_bucket.append(prediction)
         gold_bucket.append(label)
+    grouped.pop(0, None)
     return compute_bucket_metrics(grouped)
 
 
@@ -283,11 +284,13 @@ def plot_metrics_by_characteristic(
             linewidth=0.5,
             zorder=1,
         )
-        xticks = [str(group) for group in groups]
         if max_threshold is not None:
             xticks = [
                 f"{tick}+" if tick >= max_threshold else str(tick) for tick in groups
             ]
+        else:
+            xticks = [str(group) for group in groups] + [str(groups[-1] + bin_size)]
+            groups = groups + [groups[-1] + bin_size]
     else:
         axis.bar(
             groups,

@@ -322,7 +322,7 @@ def plot_error_category_frequencies(summary: dict[str, Any], output_path: Path) 
     labels = list(ordered.keys())
     values = list(ordered.values())
 
-    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 0.6), 5.5))
+    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 0.55), 4))
     bars = ax.bar(
         [label.replace("_", " ").title() for label in labels],
         values,
@@ -344,6 +344,7 @@ def plot_error_category_frequencies(summary: dict[str, Any], output_path: Path) 
             fontsize=8,
         )
 
+    plt.ylim(top=max(values) * 1.15)
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)

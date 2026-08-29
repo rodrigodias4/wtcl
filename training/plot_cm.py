@@ -63,7 +63,7 @@ def plot_confusion_matrix(
         y_true, y_pred, labels=label_list, normalize="true" if normalize else None
     )
 
-    plt.figure(figsize=(6, 5))
+    plt.figure(figsize=(3.6, 3))
 
     sns.heatmap(
         cm,
@@ -72,6 +72,9 @@ def plot_confusion_matrix(
         cmap="BuPu",
         xticklabels=label_list,
         yticklabels=label_list,
+        linewidths=0.2,
+        linecolor="black",
+        clip_on=False,
     )
 
     plt.xlabel("Predicted label")

@@ -16,7 +16,7 @@ script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 def plot_validation_metric_curve_single(
     results: dict, label: str, metric: str, output_path: Path
 ):
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(6.7, 4))
     max_epochs = 0
     mean = []
     std = []
@@ -46,6 +46,8 @@ def plot_validation_metric_curve_single(
             mec="white",
             linestyle="-",
             label="$M_{%s}$" % model_name[0:4],
+            ms=4,
+            mew=0.4,
             zorder=2,
         )
 
@@ -148,7 +150,7 @@ def plot_train_val_loss_curves(results, output_path: Path):
     val_color = "tab:orange"
     max_epochs = 0
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(6.7, 4))
 
     for i, (model_name, metrics) in enumerate(results.items()):
         if model_name == "overall":
@@ -164,8 +166,8 @@ def plot_train_val_loss_curves(results, output_path: Path):
             color=train_color,
             marker=marker,
             mec="white",
-            mew=0.7,
-            ms=7,
+            mew=0.4,
+            ms=4,
             linestyle="-",
             zorder=2,
         )
@@ -177,8 +179,8 @@ def plot_train_val_loss_curves(results, output_path: Path):
             color=val_color,
             marker=marker,
             mec="white",
-            mew=0.7,
-            ms=7,
+            mew=0.4,
+            ms=5,
             linestyle="-",
             zorder=2,
         )
@@ -192,9 +194,7 @@ def plot_train_val_loss_curves(results, output_path: Path):
     train_line = mlines.Line2D(
         [], [], color=train_color, linestyle="-", label="Training"
     )
-    val_line = mlines.Line2D(
-        [], [], color=val_color, linestyle="--", label="Validation"
-    )
+    val_line = mlines.Line2D([], [], color=val_color, linestyle="-", label="Validation")
     marker_lines = [
         mlines.Line2D(
             [],
