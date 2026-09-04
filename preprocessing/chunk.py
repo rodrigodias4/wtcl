@@ -121,13 +121,15 @@ def chunk_spans(
             if span["start"] < chunk_end_char and span["end"] > chunk_start_char:
                 span_start = max(span["start"], chunk_start_char) - chunk_start_char
                 span_end = min(span["end"], chunk_end_char) - chunk_start_char
-                chunk_spans.append(
-                    {
-                        "start": span_start,
-                        "end": span_end,
-                        "text": chunk_text[span_start:span_end],
-                    }
-                )
+                chunk_span = {
+                    "start": span_start,
+                    "end": span_end,
+                    "text": chunk_text[span_start:span_end],
+                }
+                for reason_axis in ["reason_form", "reason_frame", "reason_domain"]:
+                    if reason_axis in span:
+                        chunk_span[reason_axis] = span[reason_axis]
+                chunk_spans.append(chunk_span)
 
         chunks.append(
             {
