@@ -10,7 +10,7 @@ import ast
 from transformers import AutoTokenizer
 from rich.console import Console
 
-sys.path.append(str(Path(__file__).resolve().parent.parent / "training"))
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent / "training"))
 from train import B_ID, encode
 from utils import id2label
 
@@ -59,7 +59,12 @@ def _get_tag_counts(df):
 
 def plot_tag_distribution(plot_data: pd.DataFrame, output_dir: Path):
     ax = plot_data.plot(
-        kind="bar", stacked=True, figsize=(12, 6), edgecolor="white", zorder=3
+        kind="bar",
+        stacked=True,
+        figsize=(8, 5),
+        edgecolor="black",
+        linewidth=0.4,
+        zorder=3,
     )
 
     plt.xlabel("Debate")
@@ -72,7 +77,7 @@ def plot_tag_distribution(plot_data: pd.DataFrame, output_dir: Path):
         ha="center",
     )
     plt.grid(axis="y", alpha=0.5, zorder=0)
-    plt.legend(title="Tag")
+    plt.legend(title="Tag", bbox_to_anchor=(1, 1), loc="upper left")
     plt.tight_layout()
     plt.savefig(output_dir / "bio_tag_distribution.png", dpi=300)
     plt.close()

@@ -229,6 +229,7 @@ annotation/exports/*.filtered*
 annotation/exports/*.chunked*
 annotation/exports/*.sampled*
 annotation/exports/project-*
+annotation/analysis/output
 **/temp*
 
 llm/output/

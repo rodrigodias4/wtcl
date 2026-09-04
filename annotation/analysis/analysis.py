@@ -737,7 +737,7 @@ def _hist_plot(
     align_integer_bins: bool = False,
     show_value_labels: bool = False,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(7, 4))
     clean = pd.to_numeric(series, errors="coerce").dropna()
     if clean.empty:
         ax.text(
@@ -757,7 +757,13 @@ def _hist_plot(
         else:
             bin_edges = np.histogram_bin_edges(clean, bins=bins)
         ax.hist(
-            clean, bins=bin_edges, color=color, edgecolor="white", alpha=0.9, log=log_y
+            clean,
+            bins=bin_edges,
+            color=color,
+            edgecolor="black",
+            linewidth=0.4,
+            alpha=1.0,
+            log=log_y,
         )
         # Use integer y-axis ticks for histogram counts
         ax.yaxis.set_major_locator(MaxNLocator(integer=True))
@@ -998,8 +1004,8 @@ def _plot_debate_totals_by_speaker(
                 width,
                 bottom=bottoms,
                 color=speaker_colors[speaker],
-                edgecolor="white",
-                linewidth=0.6,
+                edgecolor="black",
+                linewidth=0.4,
                 alpha=0.95,
             )
             bottoms += values
@@ -1074,7 +1080,7 @@ def _plot_debate_claim_span_share(
     xlabel_suffix: str,
     color_fn: Any,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(7, 4))
 
     has_debates = (
         not claim_metrics.empty
@@ -1175,8 +1181,8 @@ def _plot_debate_claim_span_share(
             values,
             bottom=bottoms,
             color=color_fn(group),
-            edgecolor="white",
-            linewidth=0.7,
+            edgecolor="black",
+            linewidth=0.5,
             width=0.72,
             alpha=0.96,
             label=PARTY_FULLNAME.get(str(group), str(group)),
@@ -1283,7 +1289,7 @@ def _plot_claim_density(
         plt.close(fig)
 
     def _plot_span_occupancy_histogram(path: Path, title: str) -> None:
-        fig, ax = plt.subplots(figsize=(8, 5))
+        fig, ax = plt.subplots(figsize=(6, 4))
         if clean.empty:
             ax.text(
                 0.5,
@@ -1321,7 +1327,8 @@ def _plot_claim_density(
                 width=np.diff(bins),
                 align="edge",
                 color="#2a9d8f",
-                edgecolor="white",
+                edgecolor="black",
+                linewidth=0.4,
                 alpha=0.82,
             )
 
@@ -1451,6 +1458,8 @@ def _plot_speaker_spans_per_turn(
                 PARTY_FULLNAME.get(SPEAKER_PARTY[speaker], "Unknown")
                 for speaker in speakers
             ],
+            edgecolor="black",
+            linewidth=0.4,
             alpha=0.9,
         )
         _decorate_axis(
@@ -1506,6 +1515,8 @@ def _plot_speaker_span_coverage(
                 PARTY_FULLNAME.get(SPEAKER_PARTY[speaker], "Unknown")
                 for speaker in speakers
             ],
+            edgecolor="black",
+            linewidth=0.4,
             alpha=0.9,
         )
         _decorate_axis(
@@ -1601,7 +1612,7 @@ def _plot_speaker_word_lengths(
     bins: int,
     title_prefix: str,
 ) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(11, 5))
 
     def _gaussian_smooth(values: np.ndarray, sigma_bins: float = 1.3) -> np.ndarray:
         if len(values) == 0:
@@ -1943,10 +1954,12 @@ def _plot_reason_correlation(
         return
 
     corr = bin_df.corr()
-    size = max(10.0, 0.35 * len(all_labels) + 4.0)
+    size = max(8.0, 0.18 * len(all_labels) + 4.0)
     fig, ax = plt.subplots(figsize=(size, size))
 
-    im = ax.imshow(corr.to_numpy(dtype=float), cmap="coolwarm", vmin=-1, vmax=1)
+    im = ax.imshow(
+        corr.to_numpy(dtype=float) * 100, cmap="coolwarm", vmin=-100, vmax=100
+    )
     ax.set_xticks(np.arange(len(all_labels)))
     ax.set_yticks(np.arange(len(all_labels)))
     ax.set_xticklabels(all_labels, rotation=45, ha="right")
@@ -1961,11 +1974,14 @@ def _plot_reason_correlation(
 
     for i in range(len(all_labels)):
         for j in range(len(all_labels)):
+            if i == j:
+                continue
+
             val = corr.iat[i, j]
             ax.text(
                 j,
                 i,
-                f"{val:.2f}",
+                f"{val * 100:.0f}",
                 ha="center",
                 va="center",
                 color="black",
