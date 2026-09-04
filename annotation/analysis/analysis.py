@@ -873,7 +873,7 @@ def _plot_debate_totals_by_speaker(
     outdir: Path,
     title_prefix: str,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(8, 5))
 
     has_turn_debates = not turn_metrics.empty and "debate_id" in turn_metrics.columns
     has_claim_debates = not claim_metrics.empty and "debate_id" in claim_metrics.columns
@@ -1033,7 +1033,7 @@ def _plot_debate_totals_by_speaker(
     )
     ax.set_xticks(x)
     ax.set_xticklabels(
-        [_debate_year_label(debate) for debate in debates], rotation=30, ha="right"
+        [_debate_year_label(debate) for debate in debates], rotation=0, ha="center"
     )
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
 
@@ -1058,7 +1058,7 @@ def _plot_debate_totals_by_speaker(
         )
 
     fig.text(
-        0.08,
+        0.12,
         0.92,
         "Left bar = Turns, Right bar = Spans",
         ha="left",
