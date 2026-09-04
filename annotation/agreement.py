@@ -1,96 +1,18 @@
 from argparse import ArgumentParser
 from ast import literal_eval
-import ast
-from itertools import product
 from pathlib import Path
 import sys
-from numpy import zeros
-from pandas import read_csv
+from pandas import isnull, read_csv
 from sklearn.metrics import classification_report, cohen_kappa_score
 from rich.console import Console
 
 sys.path.append((Path(__file__).resolve().parent.parent / "training").as_posix())
 from train import encode, get_tokenizer
+from partial_span_analysis import compute_partial_span_metrics
 from utils import label_list
 from plot_cm import compute_metrics_span_level
-from typing import Tuple
-from scipy.optimize import linear_sum_assignment
 
 console = Console()
-
-
-def span_iou(a: dict, b: dict) -> float:
-    """
-    IoU between two half-open spans [start, end).
-    """
-    inter = max(0, min(a["end"], b["end"]) - max(a["start"], b["start"]))
-
-    if inter == 0:
-        return 0.0
-
-    union = (a["end"] - a["start"]) + (b["end"] - b["start"]) - inter
-
-    return inter / union
-
-
-def partial_span_f1(df_gold, df_pred, threshold=0.5):
-    """
-    Compute Partial Span Precision/Recall/F1 using IoU matching.
-    """
-
-    tp = 0
-    fp = 0
-    fn = 0
-
-    for (_, row_gold), (_, row_pred) in zip(df_gold.iterrows(), df_pred.iterrows()):
-
-        gold = ast.literal_eval(row_gold["spans"])
-        pred = ast.literal_eval(row_pred["spans"])
-
-        if len(gold) == 0:
-            fp += len(pred)
-            continue
-
-        if len(pred) == 0:
-            fn += len(gold)
-            continue
-
-        cost = zeros((len(gold), len(pred)))
-
-        for i, g in enumerate(gold):
-            for j, p in enumerate(pred):
-                cost[i, j] = -span_iou(g, p)
-
-        rows, cols = linear_sum_assignment(cost)
-
-        matched_gold = set()
-        matched_pred = set()
-
-        for r, c in zip(rows, cols):
-            iou = -cost[r, c]
-
-            if iou >= threshold:
-                tp += 1
-                matched_gold.add(r)
-                matched_pred.add(c)
-
-        fn += len(gold) - len(matched_gold)
-        fp += len(pred) - len(matched_pred)
-
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    recall = tp / (tp + fn) if tp + fn else 0.0
-
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-
-    return {
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "tp": tp,
-        "fp": fp,
-        "fn": fn,
-        "threshold": threshold,
-    }
 
 
 def parse_args():
@@ -110,24 +32,54 @@ def main():
     df_A = read_csv(args.file_A)
     df_B = read_csv(args.file_B)
 
-    # Ensure both dataframes have the same length
-    if len(df_A) != len(df_B):
-        raise ValueError("Annotation files must have the same number of entries.")
-
     labels_A = []
     labels_B = []
     tokenizer = get_tokenizer("FacebookAI/roberta-base")
 
     for idx in range(len(df_A)):
+        if idx > len(df_B) - 1:
+            console.print(
+                f"Halting at index {idx} as file_B has fewer entries than file_A."
+            )
+            break
         row_A = df_A.iloc[idx]
         row_B = df_B.iloc[idx]
+
+        assert row_A["id"] == row_B["id"], f"Row IDs do not match at index {idx}."
+        assert row_A["text"] == row_B["text"], f"Row texts do not match at index {idx}."
+
+        if (
+            row_A["spans"] is None
+            or row_B["spans"] is None
+            or isnull(row_A["spans"])
+            or isnull(row_B["spans"])
+            or row_A["spans"] == ""
+            or row_B["spans"] == ""
+            or row_A["spans"] == "PASS"
+            or row_B["spans"] == "PASS"
+        ):
+            console.print(f"Skipping row {row_A['id']} due to missing spans.")
+            continue
+
+        if row_A["text"] != row_B["text"]:
+            console.print(
+                f"[yellow]Warning:[/yellow] Texts do not match at row {row_A['id']}."
+            )
 
         spans_A = literal_eval(row_A["spans"])
         spans_B = literal_eval(row_B["spans"])
 
+        if not isinstance(spans_A, list) or not isinstance(spans_B, list):
+            console.print(f"Skipping row {idx} due to invalid span format.")
+            continue
+
         # Encode the spans
         enc_A = encode(row_A["text"], spans_A, tokenizer)
         enc_B = encode(row_B["text"], spans_B, tokenizer)
+
+        assert len(enc_A["labels"]) == len(
+            enc_B["labels"]
+        ), f"Encoded label lengths do not match at ID {row_A['id']}."
 
         labels_A.append(
             [label for label, mask in zip(enc_A["labels"], enc_A["crf_mask"]) if mask]
@@ -135,9 +87,16 @@ def main():
         labels_B.append(
             [label for label, mask in zip(enc_B["labels"], enc_B["crf_mask"]) if mask]
         )
+        assert len(labels_A[-1]) == len(
+            labels_B[-1]
+        ), f"Filtered label lengths do not match at ID {row_A['id']}."
 
     labels_A_flat = [label for sublist in labels_A for label in sublist]
     labels_B_flat = [label for sublist in labels_B for label in sublist]
+
+    assert len(labels_A_flat) == len(
+        labels_B_flat
+    ), "Flattened label lists must be of the same length."
 
     # Cohen's Kappa
     kappa = cohen_kappa_score(labels_A_flat, labels_B_flat)
@@ -175,10 +134,11 @@ def main():
     )
 
     # Partial Span F1 for different IoU thresholds
-    for t in (0.25, 0.5, 0.75):
-        m = partial_span_f1(df_A, df_B, threshold=t)
+    thresholds = [0.25, 0.5, 0.75]
+    m = compute_partial_span_metrics(labels_A, labels_B, thresholds=thresholds)
+    for i, t in enumerate(thresholds):
         console.print(
-            f"IoU ≥ {t:.2f}: F1 = {float(m['f1']):.2%} P={float(m['precision']):.2%} R={(float(m['recall'])):.2%}"
+            f"IoU ≥ {t:.2f}: F1 = {float(m[i]['f1']):.2%} P={float(m[i]['precision']):.2%} R={(float(m[i]['recall'])):.2%}"
         )
 
 
