@@ -43,6 +43,7 @@ matplotlib.use("Agg")
 console = Console()
 
 IGNORE_MODERATORS = True
+UNSPECIFIED_REASON = "unspecified"
 
 WORD_RE = re.compile(r"\S+")
 
@@ -525,7 +526,8 @@ def _compute_reason_axis_metrics(
     records: List[Dict[str, Any]] = []
     for _, row in claim_metrics.iterrows():
         speaker = _normalize_speaker(row.get("speaker"))
-        for choice in _parse_reason_choices(row.get(axis_column)):
+        choices = _parse_reason_choices(row.get(axis_column)) or [UNSPECIFIED_REASON]
+        for choice in choices:
             records.append({"reason_choice": choice, "speaker": speaker})
 
     if not records:
@@ -1249,6 +1251,144 @@ def _plot_debate_claim_span_share_by_party(
     )
 
 
+def _plot_debate_claim_span_words_by_party(
+    turn_metrics: pd.DataFrame,
+    claim_metrics: pd.DataFrame,
+    outdir: Path,
+    title_prefix: str,
+) -> None:
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    has_turn_data = all(
+        column in turn_metrics.columns
+        for column in ("debate_id", "speaker", "turn_word_len")
+    )
+    has_claim_data = all(
+        column in claim_metrics.columns
+        for column in ("debate_id", "speaker", "span_word_len")
+    )
+    if not has_turn_data or not has_claim_data:
+        ax.text(
+            0.5,
+            0.5,
+            "No word-normalized claim span data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(
+            _figure_path(outdir, "debate_claim_span_words_by_party.png"), dpi=300
+        )
+        plt.close(fig)
+        return
+
+    turn_source = turn_metrics.dropna(
+        subset=["debate_id", "speaker", "turn_word_len"]
+    ).copy()
+    claim_source = claim_metrics.dropna(
+        subset=["debate_id", "speaker", "span_word_len"]
+    ).copy()
+    if turn_source.empty or claim_source.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No word-normalized claim span data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(
+            _figure_path(outdir, "debate_claim_span_words_by_party.png"), dpi=300
+        )
+        plt.close(fig)
+        return
+
+    turn_source["party"] = turn_source["speaker"].apply(_party_for_speaker)
+    claim_source["party"] = claim_source["speaker"].apply(_party_for_speaker)
+    turn_source["turn_word_len"] = pd.to_numeric(
+        turn_source["turn_word_len"], errors="coerce"
+    )
+    claim_source["span_word_len"] = pd.to_numeric(
+        claim_source["span_word_len"], errors="coerce"
+    )
+    turn_source = turn_source.dropna(subset=["turn_word_len"])
+    claim_source = claim_source.dropna(subset=["span_word_len"])
+
+    denominator = turn_source.pivot_table(
+        index="debate_id",
+        columns="party",
+        values="turn_word_len",
+        aggfunc="sum",
+        fill_value=0,
+    )
+    numerator = claim_source.pivot_table(
+        index="debate_id",
+        columns="party",
+        values="span_word_len",
+        aggfunc="sum",
+        fill_value=0,
+    )
+    debate_order = pd.unique(
+        pd.concat([turn_source["debate_id"], claim_source["debate_id"]])
+    ).tolist()
+    parties = sorted(set(denominator.columns) | set(numerator.columns))
+    denominator = denominator.reindex(index=debate_order, columns=parties, fill_value=0)
+    numerator = numerator.reindex(index=debate_order, columns=parties, fill_value=0)
+    word_rate = numerator.div(denominator.replace(0, np.nan)).fillna(0.0)
+    rate_totals = word_rate.sum(axis=1).replace(0, np.nan)
+    normalized = word_rate.div(rate_totals, axis=0).fillna(0.0) * 100.0
+
+    x = np.arange(len(debate_order))
+    bottoms = np.zeros(len(debate_order), dtype=float)
+    for party in parties:
+        values = normalized[party].to_numpy(dtype=float)
+        if np.all(values == 0):
+            continue
+        ax.bar(
+            x,
+            values,
+            bottom=bottoms,
+            color=PARTY_COLOR.get(str(party), UNKNOWN_PARTY_COLOR),
+            edgecolor="black",
+            linewidth=0.5,
+            width=0.72,
+            alpha=0.96,
+            label=PARTY_FULLNAME.get(str(party), str(party)),
+            zorder=3,
+        )
+        bottoms += values
+
+    _decorate_axis(
+        ax,
+        (
+            f"{title_prefix}Word-Normalized Claim Span Share by Party"
+            if title_prefix
+            else "Word-Normalized Claim Span Share by Party"
+        ),
+        "Debate",
+        "Share of word-normalized claim spans (%)",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels([_debate_year_label(debate) for debate in debate_order])
+    ax.set_ylim(0, 100)
+    ax.grid(axis="y", alpha=0.5, zorder=0)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    if parties:
+        ax.legend(title="Party", loc="lower right")
+
+    fig.tight_layout()
+    fig.savefig(
+        _figure_path(outdir, "debate_claim_span_words_by_party.png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
 def _plot_claim_density(
     claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
@@ -1434,7 +1574,7 @@ def _plot_claim_density(
 def _plot_speaker_spans_per_turn(
     speaker_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(6, 4))
 
     if speaker_metrics.empty:
         ax.text(
@@ -1487,7 +1627,7 @@ def _plot_speaker_spans_per_turn(
 def _plot_speaker_span_coverage(
     speaker_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(6, 4))
 
     if speaker_metrics.empty:
         ax.text(
@@ -1542,7 +1682,7 @@ def _plot_speaker_span_coverage(
 def _plot_speaker_span_count(
     speaker_metrics: pd.DataFrame, outdir: Path, title_prefix: str
 ) -> None:
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(6, 4))
 
     if speaker_metrics.empty:
         ax.text(
@@ -1795,7 +1935,7 @@ def _plot_reason_axis_rankings(
         figsize = (8, 5)
     fig, ax = plt.subplots(figsize=figsize)
 
-    axis_label = axis_name.replace("_", " ").title()
+    axis_label = axis_name.split("_")[-1].title()
     if reason_axis_metrics.empty:
         ax.text(
             0.5,
@@ -1988,7 +2128,7 @@ def _plot_reason_correlation(
                 fontsize=7,
             )
 
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation (%)")
     fig.tight_layout()
     fig.savefig(
         _figure_path(outdir, "reason_correlation.png"), dpi=300, bbox_inches="tight"
@@ -2104,6 +2244,169 @@ def clear_output_directory(outdir: Path) -> None:
                 pass
 
 
+def _print_reason_axis_coverage(claim_metrics: pd.DataFrame) -> None:
+    claim_count = len(claim_metrics)
+    console.print("Claim span tag coverage:")
+    for axis_name, axis_label in (
+        ("reason_domain", "Domain"),
+        ("reason_frame", "Frame"),
+        ("reason_form", "Form"),
+    ):
+        tag_counts = [
+            len(_parse_reason_choices(value))
+            for value in claim_metrics.get(axis_name, pd.Series(dtype=object))
+        ]
+        tagged_claim_count = sum(count > 0 for count in tag_counts)
+        total_tag_count = sum(tag_counts)
+        tagged_percentage = (
+            100.0 * tagged_claim_count / claim_count if claim_count else 0.0
+        )
+        average_tags = total_tag_count / claim_count if claim_count else 0.0
+        std_tags = float(np.std(tag_counts)) if tag_counts else 0.0
+        console.print(
+            f"  {axis_label}: {tagged_percentage:.1f}% of claim spans contain a tag; "
+            f"average tags per claim = {average_tags:.2f}; "
+            f"std = {std_tags:.2f}"
+        )
+
+
+def _plot_reason_axis_distributions(
+    claim_metrics: pd.DataFrame, outdir: Path, title_prefix: str
+) -> None:
+    axis_specs = (
+        ("reason_domain", "Domain", "#2a9d8f"),
+        ("reason_frame", "Frame", "#457b9d"),
+        ("reason_form", "Form", "#e76f51"),
+    )
+
+    line_fig, ax = plt.subplots(figsize=(6, 4))
+    plotted = False
+    for axis_name, axis_label, color in axis_specs:
+        tag_counts = np.asarray(
+            [
+                len(_parse_reason_choices(value))
+                for value in claim_metrics.get(axis_name, pd.Series(dtype=object))
+            ],
+            dtype=float,
+        )
+        if tag_counts.size == 0:
+            continue
+
+        unique_tag_counts, claim_frequencies = np.unique(tag_counts, return_counts=True)
+        normalized_frequencies = claim_frequencies / tag_counts.size
+        ax.plot(
+            unique_tag_counts,
+            normalized_frequencies,
+            color=color,
+            linewidth=2.0,
+            marker="o",
+            markersize=6,
+            alpha=0.9,
+            label=axis_label,
+        )
+        plotted = True
+
+    if not plotted:
+        ax.text(
+            0.5,
+            0.5,
+            "No reason axis data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+    else:
+        _decorate_axis(
+            ax,
+            (
+                f"{title_prefix}Tag-count Distributions"
+                if title_prefix
+                else "Tag-count Distributions"
+            ),
+            "Tags per claim",
+            "Proportion of claims",
+        )
+        ax.set_xlim(left=0)
+        ax.set_ylim(0.0, 1.0)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.legend(title="Axis")
+
+    line_fig.tight_layout()
+    line_fig.savefig(
+        _figure_path(outdir, "reason_axis_tag_distributions.png"),
+        dpi=300,
+    )
+    plt.close(line_fig)
+
+    box_fig, ax_box = plt.subplots(figsize=(6, 4))
+    box_data = []
+    box_labels = []
+    for axis_name, axis_label, _ in axis_specs:
+        tag_counts = np.asarray(
+            [
+                len(_parse_reason_choices(value))
+                for value in claim_metrics.get(axis_name, pd.Series(dtype=object))
+            ],
+            dtype=float,
+        )
+        if tag_counts.size == 0:
+            continue
+        box_data.append(tag_counts)
+        box_labels.append(axis_label)
+
+    if box_data:
+        ax_box.boxplot(
+            box_data,
+            labels=box_labels,
+            patch_artist=True,
+            widths=0.5,
+            medianprops={"color": "black", "linewidth": 1.5},
+            boxprops={"linewidth": 1.0},
+            whiskerprops={"linewidth": 1.0},
+            capprops={"linewidth": 1.0},
+        )
+        for patch, (_, _, color) in zip(
+            ax_box.artists,
+            [
+                ("Domain", "#2a9d8f"),
+                ("Frame", "#457b9d"),
+                ("Form", "#e76f51"),
+            ],
+        ):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.8)
+        _decorate_axis(
+            ax_box,
+            (
+                f"{title_prefix}Tag Count by Axis"
+                if title_prefix
+                else "Tag Count by Axis"
+            ),
+            "Reason axis",
+            "Tags per claim",
+        )
+        ax_box.set_ylim(bottom=0)
+        ax_box.yaxis.set_major_locator(MaxNLocator(integer=True))
+    else:
+        ax_box.text(
+            0.5,
+            0.5,
+            "No reason axis data available",
+            ha="center",
+            va="center",
+            transform=ax_box.transAxes,
+        )
+        ax_box.set_axis_off()
+
+    box_fig.tight_layout()
+    box_fig.savefig(
+        _figure_path(outdir, "reason_axis_tag_boxplot.png"),
+        dpi=300,
+    )
+    plt.close(box_fig)
+
+
 def analyze(
     input_csv: Path, outdir: Path, bins: int, title_prefix: Optional[str]
 ) -> None:
@@ -2160,9 +2463,14 @@ def analyze(
     _plot_reason_correlation(claim_metrics, outdir, title_prefix=prefix)
 
     _plot_debate_claim_span_share_by_party(claim_metrics, outdir, title_prefix=prefix)
+    _plot_debate_claim_span_words_by_party(
+        turn_metrics, claim_metrics, outdir, title_prefix=prefix
+    )
     _plot_reason_domain_per_debate(claim_metrics, outdir, title_prefix=prefix)
+    _plot_reason_axis_distributions(claim_metrics, outdir, title_prefix=prefix)
 
     console.print(f"Analyzed {len(turn_metrics)} turns and {len(claim_metrics)} claims")
+    _print_reason_axis_coverage(claim_metrics)
     """ if not speaker_metrics.empty:
         console.print("Per-speaker check-worthy metrics:")
         for _, row in speaker_metrics.iterrows():

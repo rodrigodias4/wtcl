@@ -52,12 +52,19 @@ def collect_model_results(transformer_dir):
 
         validation_results = model_results["overall"].get("validation", {})
         test_results = model_results["overall"].get("test", {})
+        validation_mean = {
+            label: values.get("mean", values)
+            for label, values in validation_results.items()
+        }
+        test_mean = {
+            label: values.get("mean", values) for label, values in test_results.items()
+        }
 
         models.append(
             {
                 "name": f"{model_name[5:10]} {model_name[20:]}",
-                "validation": validation_results,
-                "test": test_results,
+                "validation": validation_mean,
+                "test": test_mean,
             }
         )
 
@@ -115,7 +122,7 @@ def fill_val_table(table, models_ranked_by_validation):
         table.add_row(
             str(rank),
             model["name"],
-            f"{(model['validation']['macro']['f1'] * 100):.1f}",
+            f"{(model['validation']['macro']['f1'] * 100):.2f}",
             f"{(model['validation']['macro']['precision'] * 100):.1f}",
             f"{(model['validation']['macro']['recall'] * 100):.1f}",
             f"{(model['validation']['B']['f1'] * 100):.2f}",

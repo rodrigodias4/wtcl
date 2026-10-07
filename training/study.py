@@ -71,7 +71,7 @@ def load_model_as_first_trial(study: optuna.Study, model_path: str) -> None:
 
     with open(model_path / "results.json", "r") as f:
         model_results = json.load(f)
-        value = model_results["overall"]["validation"]["macro"]["f1"]
+        value = model_results["overall"]["validation"]["macro"]["mean"]["f1"]
     with open(starting_hparams_path, "r") as f:
         starting_hparams = json.load(f)
 
@@ -98,12 +98,6 @@ def load_model_as_first_trial(study: optuna.Study, model_path: str) -> None:
         "lr_fc_mult": starting_hparams["lr_fc_mult"],
         "lr_crf_mult": starting_hparams["lr_crf_mult"],
     }
-
-    """ intermediate_values = {
-        i: v["best_validation_metrics"]["macro"]["f1"]
-        for i, (k, v) in enumerate(model_results.items())
-        if k != "overall" and "best_validation_metrics" in v
-    } """
 
     intermediate_values = [
         model_results[k]["best_validation_metrics"]["macro"]["f1"]
@@ -294,7 +288,7 @@ def parse_args() -> argparse.Namespace:
         "--num-epochs", type=int, default=10, help="Number of epochs for training"
     )
     parser.add_argument(
-        "--batch-size", type=int, required=True, help="Batch size for training"
+        "--batch-size", type=int, default=8, help="Batch size for training"
     )
     parser.add_argument(
         "--no-crf",
@@ -349,7 +343,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable gradient checkpointing to save memory during training.",
     )
-    # TODO: Add additional hyperparameters
     args = parser.parse_args()
     return args
 

@@ -4,7 +4,11 @@ from pathlib import Path
 import sys
 from pandas import isnull, read_csv
 from sklearn.metrics import classification_report, cohen_kappa_score
+import krippendorff
+from pygamma_agreement import Continuum
+from pyannote.core import Segment
 from rich.console import Console
+from rich.progress import Progress
 
 sys.path.append((Path(__file__).resolve().parent.parent / "training").as_posix())
 from train import encode, get_tokenizer
@@ -13,6 +17,19 @@ from utils import label_list
 from plot_cm import compute_metrics_span_level
 
 console = Console()
+progress = Progress(console=console, transient=True)
+
+
+def add_label_runs(continuum, annotator, labels, offset):
+    start = 0
+    for end in range(1, len(labels) + 1):
+        if end == len(labels) or labels[end] != labels[start]:
+            continuum.add(
+                annotator,
+                Segment(offset + start, offset + end),
+                str(labels[start]),
+            )
+            start = end
 
 
 def parse_args():
@@ -21,6 +38,10 @@ def parse_args():
     parser.add_argument("file_A", type=str, help="Path to the first annotation file.")
 
     parser.add_argument("file_B", type=str, help="Path to the second annotation file.")
+
+    parser.add_argument(
+        "--latex", action="store_true", help="Output results in LaTeX format."
+    )
 
     return parser.parse_args()
 
@@ -98,24 +119,104 @@ def main():
         labels_B_flat
     ), "Flattened label lists must be of the same length."
 
+    progress.start()
     # Cohen's Kappa
+    progress_temp = progress.add_task(
+        description="Computing Cohen's Kappa...", total=None
+    )
     kappa = cohen_kappa_score(labels_A_flat, labels_B_flat)
-    console.print(f"Cohen's Kappa: {kappa:.2%}")
+    progress.remove_task(progress_temp)
 
-    # Token-level metrics
+    # Krippendorff's Alpha
+    progress_temp = progress.add_task(
+        description="Computing Krippendorff's Alpha...", total=None
+    )
+    alpha = krippendorff.alpha(
+        reliability_data=[labels_A_flat, labels_B_flat],
+        level_of_measurement="nominal",
+    )
+    progress.remove_task(progress_temp)
+
+    # Mathet's Gamma
+    progress_temp = progress.add_task(
+        description="Computing Mathet's Gamma...", total=None
+    )
+    gamma_continuum = Continuum()
+    token_offset = 0
+    for row_labels_A, row_labels_B in zip(labels_A, labels_B):
+        add_label_runs(gamma_continuum, "A", row_labels_A, token_offset)
+        add_label_runs(gamma_continuum, "B", row_labels_B, token_offset)
+        token_offset += len(row_labels_A)
+    gamma = gamma_continuum.compute_gamma(n_samples=30, fast=True).gamma
+    progress.remove_task(progress_temp)
+
+    progress_temp = progress.add_task(
+        description="Computing token-level metrics...", total=None
+    )
     token_level_metrics = classification_report(
         labels_A_flat,
         labels_B_flat,
         labels=list(range(len(label_list))),
         output_dict=True,
     )
+    progress.remove_task(progress_temp)
+
+    progress_temp = progress.add_task(
+        description="Computing span-level metrics...", total=None
+    )
+    exact_span = compute_metrics_span_level(labels_A, labels_B)
+    thresholds = [0.25, 0.5, 0.75]
+    m = compute_partial_span_metrics(labels_A, labels_B, thresholds=thresholds)
+    progress.remove_task(progress_temp)
+    progress.stop()
+
+    console.print(f"Mathet's Gamma: {gamma:.2%}")
+    console.print(f"Cohen's Kappa: {kappa:.2%}")
+    console.print(f"Krippendorff's Alpha: {alpha:.2%}")
+
+    if args.latex:
+        console.print("Token-level metrics (LaTeX format):")
+        console.print(
+            f"{token_level_metrics['macro avg']['f1-score'] * 100:.1f} & "
+            f"{token_level_metrics['macro avg']['precision'] * 100:.1f} & "
+            f"{token_level_metrics['macro avg']['recall'] * 100:.1f} & "
+            f"{token_level_metrics['1']['f1-score'] * 100:.1f} & "
+            f"{token_level_metrics['1']['precision'] * 100:.1f} & "
+            f"{token_level_metrics['1']['recall'] * 100:.1f} & "
+            f"{token_level_metrics['2']['f1-score'] * 100:.1f} & "
+            f"{token_level_metrics['2']['precision'] * 100:.1f} & "
+            f"{token_level_metrics['2']['recall'] * 100:.1f} & "
+            f"{token_level_metrics['0']['f1-score'] * 100:.1f} & "
+            f"{token_level_metrics['0']['precision'] * 100:.1f} & "
+            f"{token_level_metrics['0']['recall'] * 100:.1f} \\\\"
+        )
+
+        console.print("Span-level metrics (LaTeX format):")
+        console.print(
+            f"{float(m[0]['f1']) * 100:.1f} & "
+            f"{float(m[0]['precision']) * 100:.1f} & "
+            f"{float(m[0]['recall']) * 100:.1f} & "
+            f"{float(m[1]['f1']) * 100:.1f} & "
+            f"{float(m[1]['precision']) * 100:.1f} & "
+            f"{float(m[1]['recall']) * 100:.1f} & "
+            f"{float(m[2]['f1']) * 100:.1f} & "
+            f"{float(m[2]['precision']) * 100:.1f} & "
+            f"{float(m[2]['recall']) * 100:.1f} & "
+            f"{exact_span['f1'] * 100:.1f} & "
+            f"{exact_span['precision'] * 100:.1f} & "
+            f"{exact_span['recall'] * 100:.1f} \\\\"
+        )
+        return
+
+    # Print token-level metrics
+    # Macro metrics
     console.print(
         f"Macro metrics: "
         f"F1 = {token_level_metrics['macro avg']['f1-score']:.2%}, "
         f"Precision = {token_level_metrics['macro avg']['precision']:.2%}, "
         f"Recall = {token_level_metrics['macro avg']['recall']:.2%}"
     )
-
+    # Print token-level metrics for each class
     for id in range(len(label_list)):
         console.print(
             f"Metrics for class {label_list[id]}: "
@@ -124,8 +225,7 @@ def main():
             f"Recall = {token_level_metrics[str(id)]['recall']:.2%}"
         )
 
-    # Exact Span F1
-    exact_span = compute_metrics_span_level(labels_A, labels_B)
+    # Print exact span metrics
     console.print(
         f"Exact Span metrics: "
         f"F1 = {exact_span['f1']:.2%}, "
@@ -133,9 +233,7 @@ def main():
         f"Recall = {exact_span['recall']:.2%}"
     )
 
-    # Partial Span F1 for different IoU thresholds
-    thresholds = [0.25, 0.5, 0.75]
-    m = compute_partial_span_metrics(labels_A, labels_B, thresholds=thresholds)
+    # Print partial span metrics
     for i, t in enumerate(thresholds):
         console.print(
             f"IoU ≥ {t:.2f}: F1 = {float(m[i]['f1']):.2%} P={float(m[i]['precision']):.2%} R={(float(m[i]['recall'])):.2%}"

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from matplotlib import cm, colors
 import matplotlib.pyplot as plt
+from matplotlib.ticker import LogLocator
 import colormaps as cmaps
 import numpy as np
 import pandas as pd
@@ -14,10 +15,15 @@ from transformers import AutoTokenizer
 from sklearn.metrics import classification_report
 from sklearn.metrics import f1_score
 
+from train import compute_metrics_token_level
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from partial_span_analysis import bio_sequence_to_spans, compute_partial_span_metrics
 from utils import console, label_list
+
+MAX_SEQUENCE_LENGTH_THRESHOLD = None
+MAX_SENTENCE_LENGTH_THRESHOLD = 64
 
 DEFAULT_LENGTH_BIN_SIZE = 16
 DEFAULT_SENTENCE_BIN_SIZE = 8
@@ -62,7 +68,7 @@ def collect_dataset_sequences(
     dataset_path: Path,
 ) -> list[tuple[str, Sequence, Sequence]]:
     dataset = pd.read_csv(dataset_path)
-    required_columns = {"debate_id", "id", "chunk_id", "text"}
+    required_columns = {"debate_id", "id", "text"}
     missing_columns = required_columns - set(dataset.columns)
     if missing_columns:
         raise ValueError(f"Dataset is missing columns: {sorted(missing_columns)}")
@@ -71,10 +77,16 @@ def collect_dataset_sequences(
     if set(predictions) != set(labels):
         raise ValueError("Predictions and labels must contain the same debate keys.")
 
+    sort_rows = ["id"]
+    if "chunk_id" in dataset.columns:
+        sort_rows.append("chunk_id")
+    if "sentence_num" in dataset.columns:
+        sort_rows.append("sentence_num")
+
     for debate in sorted(predictions):
         debate_rows = (
             dataset[dataset["debate_id"] == debate]
-            .sort_values(["id", "chunk_id"])
+            .sort_values(sort_rows)
             .reset_index(drop=True)
         )
         if len(predictions[debate]) != len(debate_rows) or len(labels[debate]) != len(
@@ -140,7 +152,7 @@ def get_word_offsets(
         add_special_tokens=False,
         return_offsets_mapping=True,
         truncation=True,
-        max_length=512,
+        max_length=768,
     )
     word_ids = encoding.word_ids()
     offsets = encoding["offset_mapping"]
@@ -171,7 +183,9 @@ def aggregate_by_sentence_length(
         for sentence_prediction, sentence_label in split_into_sentences(
             text, prediction, label, word_offsets
         ):
-            key = bin_start(len(sentence_label), sentence_bin_size, 64)
+            key = bin_start(
+                len(sentence_label), sentence_bin_size, MAX_SENTENCE_LENGTH_THRESHOLD
+            )
             pred_bucket, gold_bucket = grouped.setdefault(key, ([], []))
             pred_bucket.append(sentence_prediction)
             gold_bucket.append(sentence_label)
@@ -183,7 +197,7 @@ def aggregate_by_length(
 ) -> dict[int, dict]:
     grouped: dict[int, tuple[list[Sequence], list[Sequence]]] = {}
     for prediction, label in pairs:
-        key = bin_start(len(label), length_bin_size)
+        key = bin_start(len(label), length_bin_size, MAX_SEQUENCE_LENGTH_THRESHOLD)
         pred_bucket, gold_bucket = grouped.setdefault(key, ([], []))
         pred_bucket.append(prediction)
         gold_bucket.append(label)
@@ -198,8 +212,12 @@ def aggregate_by_span_count(pairs: list[tuple[Sequence, Sequence]]) -> dict[int,
         pred_bucket, gold_bucket = grouped.setdefault(key, ([], []))
         pred_bucket.append(prediction)
         gold_bucket.append(label)
-    grouped.pop(0, None)
-    return compute_bucket_metrics(grouped)
+    bucket_metrics = compute_bucket_metrics(grouped)
+    console.print(f"O-R for spans=0: {bucket_metrics[0]['O']['recall']:.2%}")
+    bucket_metrics.pop(
+        0, None
+    )  # Remove the bucket for spans=0 since it is not meaningful
+    return bucket_metrics
 
 
 def compute_bucket_metrics(
@@ -209,17 +227,7 @@ def compute_bucket_metrics(
     for key, (pred_bucket, gold_bucket) in grouped.items():
         flat_preds = [token for seq in pred_bucket for token in seq]
         flat_gold = [token for seq in gold_bucket for token in seq]
-        macro_f1 = f1_score(
-            flat_gold,
-            flat_preds,
-            labels=list(range(len(label_list))),
-            average="macro",
-            zero_division=0,
-        )
-        """ macro_f1 = compute_partial_span_metrics(
-            gold_bucket, pred_bucket, thresholds=[0.5]
-        )[0]["f1"] """
-        metrics[key] = {"f1": 0.0 if not np.isfinite(macro_f1) else float(macro_f1)}
+        metrics[key] = compute_metrics_token_level([flat_preds], [flat_gold])
         metrics[key]["count"] = len(gold_bucket)
         metrics[key]["token_count"] = len(flat_gold)
     return metrics
@@ -260,13 +268,13 @@ def plot_metrics_by_characteristic(
     figsize: tuple[int, int],
     max_threshold: int | None = None,
 ) -> None:
-    console.print(metrics)
+    # console.print(metrics)
     groups = sorted(metrics)
-    heights = [metrics[group]["f1"] for group in groups]
+    heights = [metrics[group]["macro"]["f1"] for group in groups]
     counts = [metrics[group]["count"] for group in groups]
 
     cmap = cmaps.blue_8_5g2
-    norm = colors.Normalize(
+    norm = colors.LogNorm(
         vmin=min(counts) if counts else 0, vmax=max(counts) if counts else 1
     )
     bar_colors = [cmap(norm(c)) for c in counts]
@@ -304,18 +312,30 @@ def plot_metrics_by_characteristic(
         )
         xticks = groups
 
+    for group, height, count in zip(groups, heights, counts):
+        axis.text(
+            group + 0.5 * (bin_size if histogram_mode else 0),
+            height + 0.015,
+            f"{count}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            zorder=3,
+        )
+
     axis.set_xticks(groups, xticks)
     axis.set_xlabel(xlabel, fontsize=14)
     axis.set_ylabel("Macro F1", fontsize=14)
     axis.set_ylim(0, 1)
     axis.set_yticks(np.arange(0, 1.1, 0.1))
-    axis.grid(axis="y", alpha=0.3)
+    axis.grid(axis="y", alpha=0.2 if histogram_mode else 0.3)
     axis.set_axisbelow(True)
     axis.margins(x=0.02)
 
     sm = cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = figure.colorbar(sm, ax=axis, pad=0.02)
+    cbar.ax.yaxis.set_major_locator(LogLocator(base=10))
     cbar.set_label("Support (Count)", fontsize=11)
 
     figure.tight_layout()
@@ -357,9 +377,9 @@ def main() -> None:
     global_macro_f1 = compute_global_macro_f1(pairs)
     dataset_rows = collect_dataset_sequences(predictions, labels, args.dataset)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    sentence_metrics = aggregate_by_sentence_length(
-        dataset_rows, args.sentence_bin_size, tokenizer
-    )
+    # sentence_metrics = aggregate_by_sentence_length(
+    #     dataset_rows, args.sentence_bin_size, tokenizer
+    # )
     output_dir = args.output_dir or args.preds_labels_file.parent / "figures"
     output_dir.mkdir(parents=True, exist_ok=True)
     length_plot_path = output_dir / "performance_by_sequence_length.png"
@@ -370,41 +390,44 @@ def main() -> None:
         length_plot_path,
         xlabel="Sequence length",
         histogram_mode=True,
-        figsize=(14, 4),
+        figsize=(0.4 * len(length_metrics) + 2, 3),
+        max_threshold=MAX_SEQUENCE_LENGTH_THRESHOLD,
     )
     plot_metrics_by_characteristic(
         span_metrics,
         span_plot_path,
         xlabel="Span count",
         histogram_mode=False,
-        figsize=(7, 3),
+        figsize=(0.2 * len(span_metrics) + 3, 3),
     )
-    plot_metrics_by_characteristic(
-        sentence_metrics,
-        sentence_plot_path,
-        xlabel="Sentence length",
-        histogram_mode=True,
-        figsize=(7, 3),
-        max_threshold=64,
-    )
+    # plot_metrics_by_characteristic(
+    #     sentence_metrics,
+    #     sentence_plot_path,
+    #     xlabel="Sentence length",
+    #     histogram_mode=True,
+    #     figsize=(7, 3),
+    #     max_threshold=MAX_SENTENCE_LENGTH_THRESHOLD,
+    # )
 
     console.print("Macro F1 by sequence length:")
     for length, values in sorted(length_metrics.items()):
         console.print(
             f"Length {bin_label(length, args.length_bin_size)}: n={values['count']} "
-            f"F1={values['f1']:.1%}"
+            f"F1={values['macro']['f1']:.1%}"
         )
 
     console.print("\nMacro F1 by span count:")
     for spans, values in sorted(span_metrics.items()):
-        console.print(f"Spans {spans}: n={values['count']} " f"F1={values['f1']:.1%}")
-
-    console.print("\nMacro F1 by sentence length:")
-    for length, values in sorted(sentence_metrics.items()):
         console.print(
-            f"Sentence length {bin_label(length, args.sentence_bin_size)}: "
-            f"n={values['count']} F1={values['f1']:.1%}"
+            f"Spans {spans}: n={values['count']} " f"F1={values['macro']['f1']:.1%}"
         )
+
+    # console.print("\nMacro F1 by sentence length:")
+    # for length, values in sorted(sentence_metrics.items()):
+    #     console.print(
+    #         f"Sentence length {bin_label(length, args.sentence_bin_size)}: "
+    #         f"n={values['count']} F1={values['macro']['f1']:.1%}"
+    #     )
 
     console.print(f"Saved plot to {length_plot_path}")
     console.print(f"Saved plot to {span_plot_path}")
