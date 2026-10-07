@@ -43,6 +43,7 @@ def spans_from_bio(labels, offsets):
         else:
 
             if start_char is not None:
+                end_char = e
                 spans.append((start_char, end_char))
                 start_char = None
                 end_char = None

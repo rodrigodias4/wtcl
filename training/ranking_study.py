@@ -36,14 +36,21 @@ def collect_study_results(study_path):
         results = trial_data["results"]
         validation_results = results["overall"]["validation"]
         test_results = results["overall"]["test"]
+        validation_mean = {
+            label: values.get("mean", values)
+            for label, values in validation_results.items()
+        }
+        test_mean = {
+            label: values.get("mean", values) for label, values in test_results.items()
+        }
 
         models.append(
             {
                 "name": model_name,
                 "results": results,
-                "validation": validation_results,
-                "test": test_results,
-                "deciding_metric": validation_results["macro"]["f1"],
+                "validation": validation_mean,
+                "test": test_mean,
+                "deciding_metric": validation_mean["macro"]["f1"],
             }
         )
 

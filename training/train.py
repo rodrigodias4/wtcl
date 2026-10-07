@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import random
 import signal
+import time
 
 import numpy as np
 import pandas as pd
@@ -192,11 +193,22 @@ class WTCLModel(nn.Module):
         # Set CRF priors if specified in hyperparameters
         if hparams["crf_priors"] and self.crf is not None:
             with torch.no_grad():
-                self.crf.transitions[O_ID, B_ID] = 1.0
+                self.crf.start_transitions[I_ID] = -10000.0
                 self.crf.transitions[O_ID, I_ID] = -10000.0
-                self.crf.transitions[B_ID, O_ID] = -1.0
-                self.crf.transitions[B_ID, B_ID] = -1.0
-                self.crf.transitions[B_ID, I_ID] = 1.0
+                self.crf.transitions[B_ID, O_ID] = -0.1
+                self.crf.transitions[B_ID, B_ID] = -0.1
+                self.crf.transitions[B_ID, I_ID] = 0.1
+
+        if self.use_crf:
+            self.initial_crf_transitions = (
+                self.crf.transitions.clone().detach().cpu().numpy()
+            )
+            self.initial_crf_transitions_start = (
+                self.crf.start_transitions.clone().detach().cpu().numpy()
+            )
+            self.initial_crf_transitions_end = (
+                self.crf.end_transitions.clone().detach().cpu().numpy()
+            )
 
     def forward(
         self,
@@ -220,7 +232,7 @@ class WTCLModel(nn.Module):
         if self.hparams["emission_bias"]:
             logits = logits + self.emission_bias
 
-        if torch.isnan(logits).any():
+        if self.training and torch.isnan(logits).any():
             console.print(f"[WARNING] NaN detected in logits!")
 
         result = {}
@@ -260,6 +272,7 @@ class WTCLModel(nn.Module):
                     mask=mask_comp,
                     reduction="mean",
                 )
+                del labels_comp, mask
 
             if not self.training:
                 result["predictions"] = self.crf.decode(
@@ -267,7 +280,7 @@ class WTCLModel(nn.Module):
                     mask=mask_comp,
                 )
 
-            del logits_comp_fp32, mask_comp, labels_comp, mask
+            del logits_comp_fp32, mask_comp
         else:
             mask = attention_mask.bool() & crf_mask.bool()
             if labels is not None:
@@ -880,6 +893,9 @@ def train_lodo(
     all_validation_preds = {debate: [] for debate in all_debates} if val else {}
     all_validation_labels = {debate: [] for debate in all_debates} if val else {}
     mixed_precision_dtype = mp_str_to_dtype.get(hparams["mixed_precision_dtype"])
+    crf_transitions_delta = {}
+    crf_transitions_start_delta = {}
+    crf_transitions_end_delta = {}
 
     if model_output_dir is not None:
         if save:
@@ -892,8 +908,10 @@ def train_lodo(
     progress_folds = progress.add_task(
         "Leave-One-Debate-Out Folds", total=len(all_debates)
     )
+    overall_training_start = time.perf_counter()
     # Leave-one-debate-out
     for i, test_debate in enumerate(all_debates):
+        fold_training_start = time.perf_counter()
         # Reset RNG state per fold so prior trials/folds do not leak into this run.
         set_random_seed(hparams["seed"] + i)
 
@@ -970,7 +988,29 @@ def train_lodo(
 
         if hparams["crf_priors"]:
             console.print("Learned CRF transition parameters (with priors):")
-            console.print(model.crf.transitions.clone().detach().cpu().numpy())
+            console.print(
+                f"transitions=\n{model.crf.transitions.clone().detach().cpu().numpy()}"
+            )
+            console.print(
+                f"start_transitions=\n{model.crf.start_transitions.clone().detach().cpu().numpy()}"
+            )
+            console.print(
+                f"end_transitions=\n{model.crf.end_transitions.clone().detach().cpu().numpy()}"
+            )
+
+        if hparams["use_crf"]:
+            crf_transitions_delta[test_debate] = (
+                model.crf.transitions.clone().detach().cpu().numpy()
+                - model.initial_crf_transitions
+            )
+            crf_transitions_start_delta[test_debate] = (
+                model.crf.start_transitions.clone().detach().cpu().numpy()
+                - model.initial_crf_transitions_start
+            )
+            crf_transitions_end_delta[test_debate] = (
+                model.crf.end_transitions.clone().detach().cpu().numpy()
+                - model.initial_crf_transitions_end
+            )
 
         # Save the best model state for this debate
         if save and best_model_state is not None and model_output_dir is not None:
@@ -1006,6 +1046,9 @@ def train_lodo(
         # Compute span-level metrics for the test split
         span_metrics = compute_metrics_span_level(preds, labels)
         model_results["test_metrics"]["span"] = span_metrics
+        model_results["training_time_seconds"] = (
+            time.perf_counter() - fold_training_start
+        )
 
         # Print test metrics for the current debate
         console.print(
@@ -1089,7 +1132,10 @@ def train_lodo(
                     indent=4,
                 )
 
-    results["overall"] = {"test": {}}
+    results["overall"] = {
+        "test": {},
+        "training_time_seconds": time.perf_counter() - overall_training_start,
+    }
     if val:
         results["overall"]["validation"] = {}
 
@@ -1101,44 +1147,78 @@ def train_lodo(
         np.median(results["overall"]["best_epochs"])
     )
 
-    # Compute average metrics across debates for each label and metric
+    # Compute mean and standard deviation across debates for each label and metric
     for label in ["macro", "span", "B", "I", "O"]:
         # Initialize overall metrics dictionaries for each label
-        results["overall"]["test"][label] = {}
+        results["overall"]["test"][label] = {"mean": {}, "std": {}}
         if val:
-            results["overall"]["validation"][label] = {}
+            results["overall"]["validation"][label] = {"mean": {}, "std": {}}
 
         for metric in ["f1", "precision", "recall"]:
-            # Compute average test metric across debates for the current label and metric
-            results["overall"]["test"][label][metric] = np.mean(
-                [
-                    results[debate]["test_metrics"][label][metric]
+            test_values = [
+                results[debate]["test_metrics"][label][metric] for debate in all_debates
+            ]
+            results["overall"]["test"][label]["mean"][metric] = np.mean(test_values)
+            results["overall"]["test"][label]["std"][metric] = np.std(test_values)
+
+            if val:
+                validation_values = [
+                    results[debate]["best_validation_metrics"][label][metric]
                     for debate in all_debates
                 ]
-            )
-
-            # Compute average validation metric across debates for the
-            # current label and metric if validation was performed
-            if val:
-                results["overall"]["validation"][label][metric] = np.mean(
-                    [
-                        results[debate]["best_validation_metrics"][label][metric]
-                        for debate in all_debates
-                    ]
+                results["overall"]["validation"][label]["mean"][metric] = np.mean(
+                    validation_values
+                )
+                results["overall"]["validation"][label]["std"][metric] = np.std(
+                    validation_values
                 )
 
     # Jaccard score is only computed for the macro label, so we compute it separately
     if val:
-        results["overall"]["validation"]["macro"]["jaccard"] = np.mean(
-            [
-                results[debate]["best_validation_metrics"]["macro"]["jaccard"]
-                for debate in all_debates
-            ]
+        validation_values = [
+            results[debate]["best_validation_metrics"]["macro"]["jaccard"]
+            for debate in all_debates
+        ]
+        results["overall"]["validation"]["macro"]["mean"]["jaccard"] = np.mean(
+            validation_values
+        )
+        results["overall"]["validation"]["macro"]["std"]["jaccard"] = np.std(
+            validation_values
         )
 
-    results["overall"]["test"]["macro"]["jaccard"] = np.mean(
-        [results[debate]["test_metrics"]["macro"]["jaccard"] for debate in all_debates]
-    )
+    test_values = [
+        results[debate]["test_metrics"]["macro"]["jaccard"] for debate in all_debates
+    ]
+    results["overall"]["test"]["macro"]["mean"]["jaccard"] = np.mean(test_values)
+    results["overall"]["test"]["macro"]["std"]["jaccard"] = np.std(test_values)
+
+    if hparams["use_crf"]:
+        average_crf_transitions_delta = np.mean(
+            list(crf_transitions_delta.values()), axis=0
+        )
+        average_crf_transitions_start_delta = np.mean(
+            list(crf_transitions_start_delta.values()), axis=0
+        )
+        average_crf_transitions_end_delta = np.mean(
+            list(crf_transitions_end_delta.values()), axis=0
+        )
+
+        console.print(
+            f"\nAverage CRF transition deltas across all debates:\n"
+            f"transitions delta:\n{average_crf_transitions_delta}\n"
+            f"start transitions delta:\n{average_crf_transitions_start_delta}\n"
+            f"end transitions delta:\n{average_crf_transitions_end_delta}\n"
+        )
+
+        results["overall"][
+            "crf_transitions_delta"
+        ] = average_crf_transitions_delta.tolist()
+        results["overall"][
+            "crf_transitions_start_delta"
+        ] = average_crf_transitions_start_delta.tolist()
+        results["overall"][
+            "crf_transitions_end_delta"
+        ] = average_crf_transitions_end_delta.tolist()
 
     return (
         results,
@@ -1155,46 +1235,54 @@ def train_lodo(
 
 
 def print_overall_results(results: dict) -> None:
+    test = results["overall"]["test"]
+    validation = results["overall"].get("validation")
+    test_mean = {label: values["mean"] for label, values in test.items()}
+    validation_mean = (
+        {label: values["mean"] for label, values in validation.items()}
+        if validation is not None
+        else None
+    )
     # Print overall token-level test metrics
     console.print(
         f"\nOverall test metrics: "
-        f"F1={results['overall']['test']['macro']['f1']:.2%} "
-        f"P={results['overall']['test']['macro']['precision']:.1%} "
-        f"R={results['overall']['test']['macro']['recall']:.1%} "
-        f"B-F1={results['overall']['test']['B']['f1']:.1%} "
-        f"B-P={results['overall']['test']['B']['precision']:.1%} "
-        f"B-R={results['overall']['test']['B']['recall']:.1%} "
-        f"I-F1={results['overall']['test']['I']['f1']:.1%} "
-        f"I-P={results['overall']['test']['I']['precision']:.1%} "
-        f"I-R={results['overall']['test']['I']['recall']:.1%} "
-        f"O-F1={results['overall']['test']['O']['f1']:.1%} "
-        f"J={results['overall']['test']['macro']['jaccard']:.1%}"
+        f"F1={test_mean['macro']['f1']:.2%} "
+        f"P={test_mean['macro']['precision']:.1%} "
+        f"R={test_mean['macro']['recall']:.1%} "
+        f"B-F1={test_mean['B']['f1']:.1%} "
+        f"B-P={test_mean['B']['precision']:.1%} "
+        f"B-R={test_mean['B']['recall']:.1%} "
+        f"I-F1={test_mean['I']['f1']:.1%} "
+        f"I-P={test_mean['I']['precision']:.1%} "
+        f"I-R={test_mean['I']['recall']:.1%} "
+        f"O-F1={test_mean['O']['f1']:.1%} "
+        f"J={test_mean['macro']['jaccard']:.1%}"
     )
 
     # Print overall span-level test metrics
     console.print(
         f"Overall span-level test metrics: "
-        f"F1={results['overall']['test']['span']['f1']:.2%} "
-        f"P={results['overall']['test']['span']['precision']:.1%} "
-        f"R={results['overall']['test']['span']['recall']:.1%} "
+        f"F1={test_mean['span']['f1']:.2%} "
+        f"P={test_mean['span']['precision']:.1%} "
+        f"R={test_mean['span']['recall']:.1%} "
     )
 
     # Print overall token-level validation metrics
-    if results["overall"].get("validation") is not None:
+    if validation_mean is not None:
         console.print(
             f"Overall validation metrics: "
-            f"F1={results['overall']['validation']['macro']['f1']:.2%} "
-            f"P={results['overall']['validation']['macro']['precision']:.1%} "
-            f"R={results['overall']['validation']['macro']['recall']:.1%} "
-            f"B-F1={results['overall']['validation']['B']['f1']:.1%} "
-            f"B-P={results['overall']['validation']['B']['precision']:.1%} "
-            f"B-R={results['overall']['validation']['B']['recall']:.1%} "
-            f"I-F1={results['overall']['validation']['I']['f1']:.1%} "
-            f"I-P={results['overall']['validation']['I']['precision']:.1%} "
-            f"I-R={results['overall']['validation']['I']['recall']:.1%} "
-            f"O-F1={results['overall']['validation']['O']['f1']:.1%} "
-            f"S-F1={results['overall']['validation']['span']['f1']:.1%} "
-            f"J={results['overall']['validation']['macro']['jaccard']:.1%} "
+            f"F1={validation_mean['macro']['f1']:.2%} "
+            f"P={validation_mean['macro']['precision']:.1%} "
+            f"R={validation_mean['macro']['recall']:.1%} "
+            f"B-F1={validation_mean['B']['f1']:.1%} "
+            f"B-P={validation_mean['B']['precision']:.1%} "
+            f"B-R={validation_mean['B']['recall']:.1%} "
+            f"I-F1={validation_mean['I']['f1']:.1%} "
+            f"I-P={validation_mean['I']['precision']:.1%} "
+            f"I-R={validation_mean['I']['recall']:.1%} "
+            f"O-F1={validation_mean['O']['f1']:.1%} "
+            f"S-F1={validation_mean['span']['f1']:.1%} "
+            f"J={validation_mean['macro']['jaccard']:.1%} "
         )
 
 

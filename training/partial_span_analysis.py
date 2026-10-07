@@ -163,6 +163,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional IoU thresholds to evaluate. Defaults to 0.1 to 1.0 in 0.1 steps.",
     )
     parser.add_argument(
+        "--output-json",
+        type=str,
+        default=None,
+        help="Optional path to save the JSON metrics summary. Defaults next to the input file.",
+    )
+    parser.add_argument(
         "--latex",
         action="store_true",
     )
@@ -173,6 +179,13 @@ def main() -> None:
     args = parse_args()
 
     input_path = Path(args.preds_labels_file)
+    if input_path.is_dir():
+        if (input_path / "test_preds_labels.json").exists():
+            input_path = input_path / "test_preds_labels.json"
+        else:
+            raise FileNotFoundError(
+                f"No 'test_preds_labels.json' found in directory {input_path}."
+            )
     with input_path.open("r") as handle:
         preds_labels = json.load(handle)
 
@@ -224,11 +237,25 @@ def main() -> None:
     plot_path = output_dir / "partial_span_iou_curve.png"
     plot_partial_span_metrics(metrics, plot_path)
 
+    output_json = (
+        Path(args.output_json)
+        if args.output_json
+        else input_path.parent / "partial_span_analysis.json"
+    )
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "thresholds": thresholds,
+        "overall": metrics,
+        "by_debate": metrics_by_debate,
+    }
+    with output_json.open("w") as handle:
+        json.dump(summary, handle, indent=2)
+
     console.print("Partial span metrics by IoU threshold:")
     if not args.latex:
         for entry in metrics:
             console.print(
-                f"IoU ≥ {entry['threshold']:.1f}: "
+                f"IoU@{entry['threshold']}: "
                 f"F1={entry['f1'] * 100:.1f}  "
                 f"Precision={entry['precision'] * 100:.1f}  "
                 f"Recall={entry['recall'] * 100:.1f}"
@@ -241,7 +268,7 @@ def main() -> None:
                 end="",
             )
         console.print(
-            f"{results['overall']['test']['span']['f1'] * 100:.1f} & {results['overall']['test']['span']['precision'] * 100:.1f} & {results['overall']['test']['span']['recall'] * 100:.1f} "
+            f"${results['overall']['test']['span']['mean']['f1'] * 100:.1f}$ & ${results['overall']['test']['span']['mean']['precision'] * 100:.1f}$ & ${results['overall']['test']['span']['mean']['recall'] * 100:.1f} $"
         )
 
         console.print("Partial span metrics by debate:")
@@ -250,13 +277,14 @@ def main() -> None:
             console.print(f"{debate[:4]} & ", end="")
             for entry in debate_metrics:
                 console.print(
-                    f"{entry['f1'] * 100:.1f} & {entry['precision'] * 100:.1f} & {entry['recall'] * 100:.1f} & ",
+                    f"${entry['f1'] * 100:.1f}$ & ${entry['precision'] * 100:.1f}$ & ${entry['recall'] * 100:.1f}$ & ",
                     end="",
                 )
             console.print(
-                f"{results[debate]['test_metrics']['span']['f1'] * 100:.1f} & {results[debate]['test_metrics']['span']['precision'] * 100:.1f} & {results[debate]['test_metrics']['span']['recall'] * 100:.1f} \\\\"
+                f"${results[debate]['test_metrics']['span']['f1'] * 100:.1f}$ & ${results[debate]['test_metrics']['span']['precision'] * 100:.1f}$ & ${results[debate]['test_metrics']['span']['recall'] * 100:.1f}$ \\\\"
             )
     console.print(f"Saved plot to {plot_path}")
+    console.print(f"Saved JSON summary to {output_json}")
 
 
 if __name__ == "__main__":

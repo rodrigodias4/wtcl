@@ -12,10 +12,9 @@ import torch
 import optuna
 
 from study_plot import plot_result_per_hparam, plot_result_per_trial
-from train import (
+from segment_train import (
     PATIENCE,
     RANDOM_SEED,
-    print_overall_results,
     set_random_seed,
     train_lodo,
 )
@@ -40,8 +39,6 @@ LR_RANGE = (5e-6, 5e-5)
 WEIGHT_DECAY_OPTIONS = [0.0, 1e-4, 1e-3, 1e-2, 3e-2, 1e-1]
 WARMUP_RATIO_RANGE = (0.0, 0.2)
 DROPOUT_RANGE = (0.1, 0.4)
-LR_FC_MULT_RANGE = (1, 50)
-LR_CRF_MULT_RANGE = (1, 50)
 
 # -----------------------------------------
 # Hyperparameter tuning with Optuna
@@ -82,12 +79,6 @@ def load_model_as_first_trial(study: optuna.Study, model_path: str) -> None:
         ),
         "warmup_ratio": optuna.distributions.FloatDistribution(*WARMUP_RATIO_RANGE),
         "dropout": optuna.distributions.FloatDistribution(*DROPOUT_RANGE),
-        "lr_fc_mult": optuna.distributions.FloatDistribution(
-            *LR_FC_MULT_RANGE, log=True
-        ),
-        "lr_crf_mult": optuna.distributions.FloatDistribution(
-            *LR_CRF_MULT_RANGE, log=True
-        ),
     }
 
     params = {
@@ -95,8 +86,6 @@ def load_model_as_first_trial(study: optuna.Study, model_path: str) -> None:
         "weight_decay": starting_hparams["weight_decay"],
         "warmup_ratio": starting_hparams["warmup_ratio"],
         "dropout": starting_hparams["dropout"],
-        "lr_fc_mult": starting_hparams["lr_fc_mult"],
-        "lr_crf_mult": starting_hparams["lr_crf_mult"],
     }
 
     intermediate_values = [
@@ -145,19 +134,7 @@ def sample_hparams(trial: optuna.Trial, crf: bool) -> dict:
         "weight_decay": trial.suggest_categorical("weight_decay", WEIGHT_DECAY_OPTIONS),
         "warmup_ratio": trial.suggest_float("warmup_ratio", *WARMUP_RATIO_RANGE),
         "dropout": trial.suggest_float("dropout", *DROPOUT_RANGE),
-        "lr_fc_mult": trial.suggest_float(
-            "lr_fc_mult",
-            *LR_FC_MULT_RANGE,
-            log=True,
-        ),
     }
-
-    if crf:
-        hparams["lr_crf_mult"] = trial.suggest_float(
-            "lr_crf_mult",
-            *LR_CRF_MULT_RANGE,
-            log=True,
-        )
 
     return hparams
 
@@ -222,19 +199,18 @@ def objective(
 
     try:
         # Train the model with the current set of hyperparameters and get the fold metrics
-        results, _, _, _, _ = train_lodo(
+        results = train_lodo(
             df=df,
             model_name=model_name,
             hparams=hparams,
             val=True,
             model_output_dir=None,
+            save=False,
             trial=trial,
         )
 
-        print_overall_results(results)
-
         # Compute the deciding metric (average macro F1 across all debates) for this trial
-        deciding_metric = results["overall"]["validation"]["macro"]["f1"]
+        deciding_metric = results["overall"]["validation"]["mean"]["f1"]
 
         # Store the trial results in the global study_trials dictionary
         study_trials[trial.number] = {
@@ -285,15 +261,10 @@ def parse_args() -> argparse.Namespace:
         help="Number of trials for hyperparameter tuning",
     )
     parser.add_argument(
-        "--num-epochs", type=int, default=10, help="Number of epochs for training"
+        "--num-epochs", type=int, default=5, help="Number of epochs for training"
     )
     parser.add_argument(
-        "--batch-size", type=int, default=8, help="Batch size for training"
-    )
-    parser.add_argument(
-        "--no-crf",
-        action="store_true",
-        help="Whether to use a CRF layer on top of the transformer model.",
+        "--batch-size", type=int, default=32, help="Batch size for training"
     )
     parser.add_argument(
         "--starting-hparams",
@@ -353,19 +324,15 @@ def main():
     set_random_seed(args.seed)
     study_name = f"study_{args.input_file.split('/')[-1].split('.')[0].split('_')[0]}_{args.model_name.split('/')[-1]}_{datetime_now}"
     fixed_hparams = {
+        "model_name": args.model_name,
         "num_epochs": args.num_epochs,
         "batch_size": args.batch_size,
-        "use_crf": not args.no_crf,
-        "crf_priors": False,
-        "emission_bias": False,
-        "freeze": 0,
         "seed": args.seed,
         "patience": PATIENCE,
         "mixed_precision_dtype": "bf16",
         "gradient_checkpointing": args.gradient_checkpointing,
+        "save": False,
     }
-
-    dataset_name = Path(args.input_file).name.split(".")[0].split("_")[0]
 
     if args.resume_from:
         console.print(f"Resuming study from {args.resume_from}")
@@ -398,7 +365,7 @@ def main():
         study_output_dir = (
             Path(os.path.dirname(os.path.abspath(__file__)))
             / "studies"
-            / dataset_name
+            / "segment"
             / args.model_name.split("/")[-1]
             / datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         )
@@ -421,12 +388,6 @@ def main():
 
     df = pd.read_csv(args.input_file)
     console.print(f"Loaded {len(df)} rows from {args.input_file}")
-
-    # Start the progress bar for hyperparameter tuning trials
-    progress_task_trials = progress.add_task(
-        f"Hyperparameter Tuning Trials", total=args.num_trials
-    )
-    progress.start()
 
     # Create the Optuna pruner based on the specified type
     match args.pruner:
@@ -479,6 +440,10 @@ def main():
             starting_hparams = json.load(f)
         study.enqueue_trial(starting_hparams)
 
+    # Start the progress bar for hyperparameter tuning trials
+    progress_task_trials = progress.add_task(f"Trials", total=args.num_trials)
+    progress.start()
+
     # Run hyperparameter tuning with Optuna
     study.optimize(
         lambda trial: objective(
@@ -501,7 +466,7 @@ def main():
 
     console.rule(f"Study Results")
     console.print(f"Best trial number: {study.best_trial.number}")
-    console.print(f"Best trial value (average macro F1): {study.best_trial.value:.4f}")
+    console.print(f"Best trial value (average F1): {study.best_trial.value:.4f}")
     console.print("Best hyperparameters:")
     [
         console.print(f"‣ {key}: {value}")
@@ -509,9 +474,9 @@ def main():
     ]
 
     # Plot the results of the study
-    (study_output_dir / "output").mkdir(parents=True, exist_ok=True)
-    plot_result_per_trial(study_results, study_output_dir / "output")
-    plot_result_per_hparam(study_results, study_output_dir / "output")
+    # (study_output_dir / "output").mkdir(parents=True, exist_ok=True)
+    # plot_result_per_trial(study_results, study_output_dir / "output")
+    # plot_result_per_hparam(study_results, study_output_dir / "output")
 
     del study  # Free up memory
 

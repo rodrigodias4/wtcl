@@ -19,11 +19,12 @@ TAG_COLUMNS = {
     "frame": "reason_frame",
     "domain": "reason_domain",
 }
+UNSPECIFIED_TAG = "unspecified"
 PARTIAL_THRESHOLDS = (0.25, 0.5, 0.75)
 FIGSIZES = {
     "form": (5, 4),
     "frame": (5, 4),
-    "domain": (9, 5),
+    "domain": (10, 5),
 }
 
 
@@ -147,7 +148,7 @@ def compute_metrics_by_tag(
 
             for claim_index, annotation_span in enumerate(annotation_spans):
                 for dimension, span_key in TAG_COLUMNS.items():
-                    tags = set(annotation_span.get(span_key, []))
+                    tags = set(annotation_span.get(span_key) or (UNSPECIFIED_TAG,))
 
                     for tag in tags:
                         if tag not in counts[dimension]:
@@ -294,7 +295,7 @@ def plot_metrics_by_tag(
             axis.scatter(
                 x_values,
                 partial,
-                label=f"Partial-span (IoU $\geqslant$ {threshold})",
+                label=f"Partial-span (IoU@{threshold})",
                 marker="o",
                 color=color,
                 zorder=3,
@@ -307,7 +308,7 @@ def plot_metrics_by_tag(
                 linestyle="--",
                 linewidth=1.0,
                 alpha=0.5,
-                label=f"Mean partial-span (IoU $\geqslant$ {threshold})",
+                label=f"Mean partial-span (IoU@{threshold})",
                 zorder=0,
             )
 
